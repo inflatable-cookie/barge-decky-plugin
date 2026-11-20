@@ -1,0 +1,6 @@
+- Support several machines. The settings file is now a machine list (`machines.json`) with one owner-only key per machine in `keys/<machine-id>.key`. Settings can add, edit and remove a machine, and the selected machine is remembered.
+- Migrate v0.1.0 settings (`machine.json` and `lan.key`) in place on first load, keeping the stored key.
+- Add a machine dropdown at the top of the panel, showing each machine's name and state.
+- Remove the error block from the panel. An unreachable machine shows as Offline. Errors go to an in-memory error log (newest first, capped at 50), opened from an icon button. Errors that need action, such as a rejected LAN key or a refused action, show one line with a link to the log.
+- Make Refresh, Settings and the error log icon-only buttons side by side, each with an accessible label, and remove the separators between action buttons.
+- Bump the version to 0.2.0.

@@ -302,6 +302,7 @@ class MachineTracker:
     def __init__(self) -> None:
         self.reachable: bool = False
         self.error: Optional[str] = None
+        self.error_kind: Optional[str] = None
         self.observation: Optional[DaemonState] = None
         self.seen_at_ms: Optional[int] = None
         self.last_action: Optional[LastAction] = None
@@ -313,6 +314,7 @@ class MachineTracker:
         """Clear cached observations when the target machine changes."""
         self.reachable = False
         self.error = None
+        self.error_kind = None
         self.observation = None
         self.seen_at_ms = None
         self.last_action = None
@@ -326,6 +328,7 @@ class MachineTracker:
         self._sending = True
         self.last_action = action
         self.error = None
+        self.error_kind = None
 
     def sent(self, action: LastAction) -> None:
         """Commit an accepted action at its accepted time."""
@@ -333,14 +336,21 @@ class MachineTracker:
         self._sending = False
         self._replaced = None
         self.error = None
+        self.error_kind = None
 
-    def refused(self, error_message: str) -> None:
+    def refused(self, error_message: str, error_kind: Optional[str] = None) -> None:
         """Roll back an optimistic click when sending fails."""
         if self._sending:
             self.last_action = self._replaced
             self._sending = False
             self._replaced = None
         self.error = error_message
+        self.error_kind = error_kind
+
+    def failed(self, error_message: str, error_kind: Optional[str] = None) -> None:
+        """Record a failed action that never changed the optimistic state (such as cancel)."""
+        self.error = error_message
+        self.error_kind = error_kind
 
     def cancelled(self) -> None:
         """Clear pending countdown and in-flight action after confirmed cancel."""
@@ -348,6 +358,7 @@ class MachineTracker:
         self._sending = False
         self._replaced = None
         self.error = None
+        self.error_kind = None
         if self.observation is not None and self.observation.pending is not None:
             self.observation = DaemonState(
                 schema=self.observation.schema,
@@ -361,6 +372,7 @@ class MachineTracker:
         self.has_polled = True
         self.reachable = True
         self.error = None
+        self.error_kind = None
         self.observation = state
         self.seen_at_ms = started_at_ms
         if self.last_action is not None and completes(
@@ -368,11 +380,17 @@ class MachineTracker:
         ):
             self.last_action = None
 
-    def apply_poll_error(self, started_at_ms: int, error_message: str) -> None:
+    def apply_poll_error(
+        self,
+        started_at_ms: int,
+        error_message: str,
+        error_kind: Optional[str] = None,
+    ) -> None:
         """Apply a failed poll while preserving the last successful observation."""
         self.has_polled = True
         self.reachable = False
         self.error = error_message
+        self.error_kind = error_kind
         if self.last_action is not None and started_at_ms >= self.last_action.fires_at_ms:
             self.last_action = self.last_action.with_dropped(True)
         if self.last_action is not None and completes(

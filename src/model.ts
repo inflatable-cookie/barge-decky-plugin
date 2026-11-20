@@ -1,4 +1,18 @@
-import type { MachineSnapshot, Offer } from "./types";
+import type {
+  MachineSnapshot,
+  MachineSummary,
+  Offer,
+  Phase,
+  PowerActionKind,
+} from "./types";
+
+/** The fields that decide a state label. Both a snapshot and a dropdown summary carry them. */
+export interface StatusFields {
+  phase: Phase;
+  action: PowerActionKind | null;
+  deadline_unix_ms: number | null;
+  last_seen_unix_ms: number | null;
+}
 
 export function countdownSeconds(deadlineMs: number, nowMs: number): number {
   return Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000));
@@ -14,12 +28,12 @@ export function offlineFor(atMs: number, nowMs: number): string {
   return `${Math.floor(hours / 24)} d`;
 }
 
-export function formatStateLabel(snapshot: MachineSnapshot, nowMs: number): string {
-  switch (snapshot.phase) {
+export function formatStateLabel(status: StatusFields, nowMs: number): string {
+  switch (status.phase) {
     case "offline": {
-      if (snapshot.last_seen_unix_ms === null) return "Offline";
-      if (nowMs - snapshot.last_seen_unix_ms < 5_000) return "Offline";
-      return `Offline for ${offlineFor(snapshot.last_seen_unix_ms, nowMs)}`;
+      if (status.last_seen_unix_ms === null) return "Offline";
+      if (nowMs - status.last_seen_unix_ms < 5_000) return "Offline";
+      return `Offline for ${offlineFor(status.last_seen_unix_ms, nowMs)}`;
     }
     case "checking":
       return "Checking…";
@@ -36,21 +50,35 @@ export function formatStateLabel(snapshot: MachineSnapshot, nowMs: number): stri
     case "restarting":
       return "Restarting…";
     case "going_down":
-      return snapshot.action === "shutdown" ? "Shutting down…" : "Going to sleep…";
+      return status.action === "shutdown" ? "Shutting down…" : "Going to sleep…";
     case "pending": {
       const verb =
-        snapshot.action === "restart"
+        status.action === "restart"
           ? "Restarting"
-          : snapshot.action === "shutdown"
+          : status.action === "shutdown"
             ? "Shutting down"
             : "Sleeping";
       const seconds =
-        snapshot.deadline_unix_ms === null
+        status.deadline_unix_ms === null
           ? 0
-          : countdownSeconds(snapshot.deadline_unix_ms, nowMs);
+          : countdownSeconds(status.deadline_unix_ms, nowMs);
       return `${verb} in ${seconds} s`;
     }
   }
+}
+
+/** Dropdown text for one machine: its name, then its state (or that it is not paired). */
+export function machineOptionLabel(machine: MachineSummary, nowMs: number): string {
+  const state = machine.paired ? formatStateLabel(machine, nowMs) : "Not paired";
+  return `${machine.name} · ${state}`;
+}
+
+export function formatLogTime(atMs: number): string {
+  return new Date(atMs).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 export function offerLabel(offer: Offer): string {
