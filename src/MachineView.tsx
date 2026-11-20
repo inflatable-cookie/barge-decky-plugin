@@ -277,32 +277,32 @@ export function MachineView({
     <PanelSection>
       <PanelSectionRow>
         <div style={{ display: "flex", gap: 8, width: "100%" }}>
-          <DialogButton
-            aria-label="Refresh"
-            style={ICON_BUTTON_STYLE}
-            disabled={busy || snapshot.waiting}
-            onClick={handleRefresh}
-          >
-            <FaSync aria-hidden="true" />
-            <span style={VISUALLY_HIDDEN}>Refresh</span>
-          </DialogButton>
-          <DialogButton
-            aria-label="Settings"
-            style={ICON_BUTTON_STYLE}
-            disabled={busy}
-            onClick={onOpenSettings}
-          >
-            <FaCog aria-hidden="true" />
-            <span style={VISUALLY_HIDDEN}>Settings</span>
-          </DialogButton>
-          <DialogButton
-            aria-label="Error log"
-            style={ICON_BUTTON_STYLE}
-            onClick={openErrorLog}
-          >
-            <FaList aria-hidden="true" />
-            <span style={VISUALLY_HIDDEN}>Error log</span>
-          </DialogButton>
+        <DialogButton
+          aria-label="Refresh"
+          style={ICON_BUTTON_STYLE}
+          disabled={busy || snapshot.waiting}
+          onClick={handleRefresh}
+        >
+          <FaSync aria-hidden="true" />
+          <span style={VISUALLY_HIDDEN}>Refresh</span>
+        </DialogButton>
+        <DialogButton
+          aria-label="Settings"
+          style={ICON_BUTTON_STYLE}
+          disabled={busy}
+          onClick={onOpenSettings}
+        >
+          <FaCog aria-hidden="true" />
+          <span style={VISUALLY_HIDDEN}>Settings</span>
+        </DialogButton>
+        <DialogButton
+          aria-label="Error log"
+          style={ICON_BUTTON_STYLE}
+          onClick={openErrorLog}
+        >
+          <FaList aria-hidden="true" />
+          <span style={VISUALLY_HIDDEN}>Error log</span>
+        </DialogButton>
         </div>
       </PanelSectionRow>
     </PanelSection>

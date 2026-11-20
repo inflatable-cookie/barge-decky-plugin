@@ -1,0 +1,2 @@
+- Remove redundant dividers from the main status and settings views, and pin the icon actions to the bottom of the panel when there is room.
+- Bump the version to 0.2.1.

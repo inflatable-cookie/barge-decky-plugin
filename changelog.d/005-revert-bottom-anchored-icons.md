@@ -1,0 +1,2 @@
+- Revert the bottom-anchored Refresh/Settings/log icon row from 0.2.1: the row follows the content again so the panel never scrolls because of it. Divider clean-up from 0.2.1 is kept.
+- Bump the version to 0.2.2.
