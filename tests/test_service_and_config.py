@@ -8,7 +8,7 @@ import stat
 from pathlib import Path
 from typing import Any
 
-from barge_plugin.config import ConfigStore, MachineConfig
+from barge_plugin.config import ConfigStore, MachineConfig, MachinesDocument
 from barge_plugin.errors import BargeError
 from barge_plugin.protocol import STATE_SCHEMA
 from barge_plugin.service import BargeService
@@ -60,6 +60,7 @@ class FakeWolSender:
 def test_config_store_keeps_key_separate_and_owner_only(tmp_path: Path) -> None:
     store = ConfigStore(tmp_path / "settings")
     cfg = MachineConfig.validated(
+        machine_id="bazzite",
         name="bazzite",
         host="bazzite.local",
         daemon_port=9777,
@@ -68,25 +69,26 @@ def test_config_store_keeps_key_separate_and_owner_only(tmp_path: Path) -> None:
         wol_port=9,
         delay_s=15,
     )
-    store.save(cfg)
+    store.save(MachinesDocument(machines=(cfg,), selected_id=cfg.id))
 
     key_hex = "ab" * 32
     source_file = tmp_path / "pair.key"
     source_file.write_text(f"{key_hex}\n", encoding="utf-8")
-    store.import_key_file(str(source_file))
+    store.import_key_file(cfg.id, str(source_file))
 
-    loaded = store.load()
+    loaded = store.load().selected
+    assert loaded is not None
     assert loaded.mac == "00:11:22:33:44:ff"
-    assert store.is_paired()
-    assert store.read_key() == bytes.fromhex(key_hex)
+    assert store.is_paired(cfg.id)
+    assert store.read_key(cfg.id) == bytes.fromhex(key_hex)
 
-    # Config JSON never contains the secret key.
-    config_text = (tmp_path / "settings" / "machine.json").read_text(encoding="utf-8")
+    # Machine list JSON never contains the secret key.
+    config_text = (tmp_path / "settings" / "machines.json").read_text(encoding="utf-8")
     assert key_hex not in config_text
-    assert stat.S_IMODE(store.key_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(store.key_path(cfg.id).stat().st_mode) == 0o600
 
-    assert store.unpair() is True
-    assert not store.is_paired()
+    assert store.unpair(cfg.id) is True
+    assert not store.is_paired(cfg.id)
 
 
 def test_service_never_logs_or_exposes_key_and_handles_optimistic_actions(tmp_path: Path) -> None:
@@ -185,10 +187,16 @@ def test_wake_failure_rolls_back_to_offline(tmp_path: Path) -> None:
     async def run() -> None:
         store = ConfigStore(tmp_path / "settings")
         store.save(
-            MachineConfig.validated(
-                name="bazzite",
-                host="192.168.1.50",
-                mac="00:11:22:33:44:ff",
+            MachinesDocument(
+                machines=(
+                    MachineConfig.validated(
+                        machine_id="bazzite",
+                        name="bazzite",
+                        host="192.168.1.50",
+                        mac="00:11:22:33:44:ff",
+                    ),
+                ),
+                selected_id="bazzite",
             )
         )
         svc = BargeService(store, sender=FakeWolSender(error=OSError("no route")))

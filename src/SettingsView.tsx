@@ -2,6 +2,7 @@ import { openFilePicker, type FileSelectionType } from "@decky/api";
 import {
   ButtonItem,
   ConfirmModal,
+  Dropdown,
   Field,
   PanelSection,
   PanelSectionRow,
@@ -9,8 +10,21 @@ import {
   showModal,
 } from "@decky/ui";
 import { useEffect, useState } from "react";
-import { getSettings, importKeyFile, saveSettings, unpair } from "./api";
-import type { MachineSnapshot } from "./types";
+import {
+  getSettings,
+  importKeyFile,
+  removeMachine,
+  saveSettings,
+  unpair,
+} from "./api";
+import type {
+  MachineSettingsRecord,
+  MachineSnapshot,
+} from "./types";
+
+/** New machines are edited with an empty id; this non-empty value is the dropdown's "Add machine…" option. */
+const ADD_NEW = "";
+const ADD_OPTION = "__add_machine__";
 
 interface SettingsViewProps {
   snapshot: MachineSnapshot;
@@ -18,35 +32,79 @@ interface SettingsViewProps {
   onBack: () => void;
 }
 
+interface MachineForm {
+  name: string;
+  host: string;
+  daemonPort: string;
+  mac: string;
+  broadcast: string;
+  wolPort: string;
+  delayS: string;
+}
+
+const BLANK_FORM: MachineForm = {
+  name: "",
+  host: "",
+  daemonPort: "9777",
+  mac: "",
+  broadcast: "255.255.255.255",
+  wolPort: "9",
+  delayS: "15",
+};
+
+function formFrom(record: MachineSettingsRecord | null): MachineForm {
+  if (!record) return BLANK_FORM;
+  return {
+    name: record.name,
+    host: record.host,
+    daemonPort: String(record.daemon_port),
+    mac: record.mac,
+    broadcast: record.broadcast,
+    wolPort: String(record.wol_port),
+    delayS: String(record.delay_s),
+  };
+}
+
 export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps) {
-  const [name, setName] = useState(snapshot.machine.name || "bazzite");
-  const [host, setHost] = useState(snapshot.machine.host);
-  const [daemonPort, setDaemonPort] = useState(String(snapshot.machine.daemon_port || 9777));
-  const [mac, setMac] = useState(snapshot.machine.mac);
-  const [broadcast, setBroadcast] = useState(snapshot.machine.broadcast || "255.255.255.255");
-  const [wolPort, setWolPort] = useState(String(snapshot.machine.wol_port || 9));
-  const [delayS, setDelayS] = useState(String(snapshot.machine.delay_s ?? 15));
+  const [machines, setMachines] = useState<MachineSettingsRecord[]>([]);
+  const [editingId, setEditingId] = useState<string>(ADD_NEW);
+  const [form, setForm] = useState<MachineForm>(BLANK_FORM);
   const [lanKey, setLanKey] = useState("");
-  const [paired, setPaired] = useState(snapshot.paired);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  const editing = machines.find((m) => m.id === editingId) ?? null;
+  const paired = editing?.paired ?? false;
+
+  /** Replace the list and open one machine in the form (or the add form when none is given). */
+  const focusMachine = (records: MachineSettingsRecord[], wantedId: string) => {
+    const target = records.find((m) => m.id === wantedId) ?? records[0] ?? null;
+    setMachines(records);
+    setEditingId(target?.id ?? ADD_NEW);
+    setForm(formFrom(target));
+    setLanKey("");
+  };
+
+  const chooseMachine = (id: string) => {
+    setError(null);
+    setNotice(null);
+    setEditingId(id);
+    setForm(formFrom(machines.find((m) => m.id === id) ?? null));
+    setLanKey("");
+  };
+
+  const reloadMachines = async () => {
+    const res = await getSettings();
+    if (res.ok) setMachines(res.machines);
+  };
 
   useEffect(() => {
     let active = true;
     void getSettings().then((res) => {
       if (!active) return;
-      setPaired(res.paired);
-      if (res.machine.name) setName(res.machine.name);
-      if (res.machine.host) setHost(res.machine.host);
-      setDaemonPort(String(res.machine.daemon_port || 9777));
-      if (res.machine.mac) setMac(res.machine.mac);
-      setBroadcast(res.machine.broadcast || "255.255.255.255");
-      setWolPort(String(res.machine.wol_port || 9));
-      setDelayS(String(res.machine.delay_s ?? 15));
-      if (!res.ok && res.error) {
-        setError(res.error);
-      }
+      if (!res.ok && res.error) setError(res.error);
+      focusMachine(res.machines, snapshot.selected_id);
     });
     return () => {
       active = false;
@@ -62,119 +120,172 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
     return Number.parseInt(trimmed, 10);
   };
 
-  const handleSave = async () => {
+  /** Runs one settings action with the busy flag, clearing old messages and showing any failure. */
+  const runBusy = async (
+    work: () => Promise<void>,
+    options: { ignoreCancel?: boolean } = {},
+  ) => {
+    setBusy(true);
     setError(null);
     setNotice(null);
-
-    const parsedDaemonPort = parseIntField(daemonPort, "Daemon port");
-    if (parsedDaemonPort === null) return;
-    const parsedWolPort = parseIntField(wolPort, "Wake-on-LAN port");
-    if (parsedWolPort === null) return;
-    const parsedDelayS = parseIntField(delayS, "Countdown delay");
-    if (parsedDelayS === null) return;
-
-    setBusy(true);
     try {
+      await work();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const cancelled = message.toLowerCase().includes("cancel");
+      if (!(options.ignoreCancel && cancelled)) setError(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSave = () => {
+    const daemonPort = parseIntField(form.daemonPort, "Daemon port");
+    if (daemonPort === null) return;
+    const wolPort = parseIntField(form.wolPort, "Wake-on-LAN port");
+    if (wolPort === null) return;
+    const delayS = parseIntField(form.delayS, "Countdown delay");
+    if (delayS === null) return;
+
+    void runBusy(async () => {
       const res = await saveSettings(
-        name,
-        host,
-        parsedDaemonPort,
-        mac,
-        broadcast,
-        parsedWolPort,
-        parsedDelayS,
+        editingId,
+        form.name,
+        form.host,
+        daemonPort,
+        form.mac,
+        form.broadcast,
+        wolPort,
+        delayS,
         lanKey,
         "",
       );
       onUpdated(res.state);
-      setPaired(res.state.paired);
       if (!res.ok) {
         setError(res.error ?? "Failed to save settings");
         return;
       }
-      setLanKey("");
-      setNotice("Settings saved");
       onBack();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+    });
   };
 
-  const handleImportKeyFile = async () => {
-    setError(null);
-    setNotice(null);
-    try {
-      const picked = await openFilePicker(
-        0 as FileSelectionType,
-        "/home/deck",
-        true,
-        false,
-        undefined,
-        undefined,
-        true,
-        true,
-      );
-      const selectedPath = picked.realpath || picked.path;
-      if (!selectedPath) return;
-      setBusy(true);
-      const res = await importKeyFile(selectedPath);
-      onUpdated(res.state);
-      setPaired(res.state.paired);
-      if (!res.ok) {
-        setError(res.error ?? "Could not import key file");
-        return;
-      }
-      setNotice("LAN key imported and stored owner-only");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.toLowerCase().includes("cancel")) {
-        setError(message);
-      }
-    } finally {
-      setBusy(false);
-    }
+  const handleImportKeyFile = () => {
+    if (!editing) return;
+    const targetId = editing.id;
+    void runBusy(
+      async () => {
+        const picked = await openFilePicker(
+          0 as FileSelectionType,
+          "/home/deck",
+          true,
+          false,
+          undefined,
+          undefined,
+          true,
+          true,
+        );
+        const selectedPath = picked.realpath || picked.path;
+        if (!selectedPath) return;
+        const res = await importKeyFile(selectedPath, targetId);
+        onUpdated(res.state);
+        if (!res.ok) {
+          setError(res.error ?? "Could not import key file");
+          return;
+        }
+        await reloadMachines();
+        setNotice("LAN key imported and stored owner-only");
+      },
+      { ignoreCancel: true },
+    );
   };
 
   const handleUnpair = () => {
+    if (!editing) return;
+    const target = editing;
     showModal(
       <ConfirmModal
-        strTitle="Remove pairing key?"
-        strDescription="This clears the stored LAN key on this Steam Deck. You will need to paste or import a key from barged pair to query state or send power actions."
+        strTitle={`Remove the pairing key for ${target.name}?`}
+        strDescription="This clears the stored LAN key for this machine on this Steam Deck. You will need to paste or import a key from barged pair to query state or send power actions."
         strOKButtonText="Unpair"
         strCancelButtonText="Cancel"
         bDestructiveWarning={true}
-        onOK={async () => {
-          setBusy(true);
-          setError(null);
-          setNotice(null);
-          try {
-            const res = await unpair();
+        onOK={() =>
+          runBusy(async () => {
+            const res = await unpair(target.id);
             onUpdated(res.state);
-            setPaired(res.state.paired);
             if (!res.ok) {
               setError(res.error ?? "Could not remove pairing key");
-            } else {
-              setNotice("Pairing key removed");
+              return;
             }
-          } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
-          } finally {
-            setBusy(false);
-          }
-        }}
+            await reloadMachines();
+            setNotice("Pairing key removed");
+          })
+        }
       />,
     );
   };
 
+  const handleRemove = () => {
+    if (!editing) return;
+    const target = editing;
+    showModal(
+      <ConfirmModal
+        strTitle={`Remove ${target.name}?`}
+        strDescription="This forgets the machine and deletes its LAN key from this Steam Deck. Pair it again to add it back."
+        strOKButtonText="Remove"
+        strCancelButtonText="Cancel"
+        bDestructiveWarning={true}
+        onOK={() =>
+          runBusy(async () => {
+            const res = await removeMachine(target.id);
+            onUpdated(res.state);
+            if (!res.ok || !res.settings) {
+              setError(res.error ?? "Could not remove machine");
+              return;
+            }
+            focusMachine(res.settings.machines, res.state.selected_id);
+            setNotice(`${target.name} removed`);
+          })
+        }
+      />,
+    );
+  };
+
+  const machineOptions = [
+    ...machines.map((m) => ({
+      data: m.id,
+      label: m.paired ? m.name : `${m.name} · not paired`,
+    })),
+    { data: ADD_OPTION, label: "Add machine…" },
+  ];
+
+  const pairingStatus = !editing
+    ? "Paste the key below to pair this machine when you save, or import a key file after saving."
+    : paired
+      ? "Paired (key stored owner-only in Decky settings)"
+      : "Not paired — run barged pair on the PC and paste or import the key";
+
   return (
     <>
-      <PanelSection title="Machine">
+      <PanelSection>
         <PanelSectionRow>
           <ButtonItem layout="below" disabled={busy} onClick={onBack}>
             Back
           </ButtonItem>
+        </PanelSectionRow>
+      </PanelSection>
+
+      <PanelSection title="Machines">
+        <PanelSectionRow>
+          <Dropdown
+            rgOptions={machineOptions}
+            selectedOption={editingId === ADD_NEW ? ADD_OPTION : editingId}
+            disabled={busy}
+            onChange={(option) => {
+              const picked = String(option.data);
+              chooseMachine(picked === ADD_OPTION ? ADD_NEW : picked);
+            }}
+          />
         </PanelSectionRow>
         {error && (
           <PanelSectionRow>
@@ -186,81 +297,84 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
             <Field label="Saved" description={notice} />
           </PanelSectionRow>
         )}
+      </PanelSection>
+
+      <PanelSection title={editing ? "Machine" : "New machine"}>
         <PanelSectionRow>
           <TextField
             label="Machine Name"
-            value={name}
+            value={form.name}
             placeholder="bazzite"
             disabled={busy}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
           />
         </PanelSectionRow>
         <PanelSectionRow>
           <TextField
             label="Host / LAN Address"
-            value={host}
+            value={form.host}
             placeholder="bazzite.local or 192.168.1.50"
             disabled={busy}
-            onChange={(e) => setHost(e.target.value)}
+            onChange={(e) => setForm({ ...form, host: e.target.value })}
           />
         </PanelSectionRow>
         <PanelSectionRow>
           <TextField
             label="Daemon Port"
-            value={daemonPort}
+            value={form.daemonPort}
             mustBeNumeric={true}
             disabled={busy}
-            onChange={(e) => setDaemonPort(e.target.value)}
+            onChange={(e) => setForm({ ...form, daemonPort: e.target.value })}
           />
         </PanelSectionRow>
         <PanelSectionRow>
           <TextField
             label="MAC Address"
-            value={mac}
+            value={form.mac}
             placeholder="00:11:22:33:44:ff"
             disabled={busy}
-            onChange={(e) => setMac(e.target.value)}
+            onChange={(e) => setForm({ ...form, mac: e.target.value })}
           />
         </PanelSectionRow>
         <PanelSectionRow>
           <TextField
             label="Broadcast Address"
-            value={broadcast}
+            value={form.broadcast}
             placeholder="255.255.255.255"
             disabled={busy}
-            onChange={(e) => setBroadcast(e.target.value)}
+            onChange={(e) => setForm({ ...form, broadcast: e.target.value })}
           />
         </PanelSectionRow>
         <PanelSectionRow>
           <TextField
             label="Wake-on-LAN Port"
-            value={wolPort}
+            value={form.wolPort}
             mustBeNumeric={true}
             disabled={busy}
-            onChange={(e) => setWolPort(e.target.value)}
+            onChange={(e) => setForm({ ...form, wolPort: e.target.value })}
           />
         </PanelSectionRow>
         <PanelSectionRow>
           <TextField
             label="Countdown Delay (seconds)"
-            value={delayS}
+            value={form.delayS}
             mustBeNumeric={true}
             disabled={busy}
-            onChange={(e) => setDelayS(e.target.value)}
+            onChange={(e) => setForm({ ...form, delayS: e.target.value })}
           />
         </PanelSectionRow>
+        {editing && (
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={busy} onClick={handleRemove}>
+              Remove Machine…
+            </ButtonItem>
+          </PanelSectionRow>
+        )}
       </PanelSection>
 
       <PanelSection title="LAN Pairing">
         <PanelSectionRow>
-          <Field
-            label="Status"
-            description={
-              paired
-                ? "Paired (key stored owner-only in Decky settings)"
-                : "Not paired — run barged pair on the PC and paste or import the key"
-            }
-          />
+          <Field label="Status" description={pairingStatus} />
         </PanelSectionRow>
         <PanelSectionRow>
           <TextField
@@ -273,7 +387,11 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
           />
         </PanelSectionRow>
         <PanelSectionRow>
-          <ButtonItem layout="below" disabled={busy} onClick={handleImportKeyFile}>
+          <ButtonItem
+            layout="below"
+            disabled={busy || !editing}
+            onClick={handleImportKeyFile}
+          >
             Import Key File…
           </ButtonItem>
         </PanelSectionRow>
@@ -289,7 +407,7 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
       <PanelSection>
         <PanelSectionRow>
           <ButtonItem layout="below" disabled={busy} onClick={handleSave}>
-            {busy ? "Saving…" : "Save Settings"}
+            {busy ? "Saving…" : editing ? "Save Machine" : "Add Machine"}
           </ButtonItem>
         </PanelSectionRow>
       </PanelSection>

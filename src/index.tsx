@@ -11,6 +11,7 @@ const INITIAL_SNAPSHOT: MachineSnapshot = {
   configured: false,
   paired: false,
   machine: {
+    id: "",
     name: "",
     host: "",
     daemon_port: 9777,
@@ -19,6 +20,9 @@ const INITIAL_SNAPSHOT: MachineSnapshot = {
     wol_port: 9,
     delay_s: 15,
   },
+  selected_id: "",
+  machines: [],
+  attention: null,
   reachable: false,
   error: null,
   seen_at_unix_ms: null,

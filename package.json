@@ -1,6 +1,6 @@
 {
   "name": "barge-decky-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Decky Loader plugin to control a Barge machine (barged) from Steam Deck Gaming Mode",
   "type": "module",
   "scripts": {

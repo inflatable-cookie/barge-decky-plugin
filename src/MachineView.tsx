@@ -1,6 +1,8 @@
 import {
   ButtonItem,
   ConfirmModal,
+  DialogButton,
+  Dropdown,
   Field,
   PanelSection,
   PanelSectionRow,
@@ -12,14 +14,24 @@ import {
   FaCheckCircle,
   FaCog,
   FaExclamationTriangle,
+  FaList,
   FaMoon,
   FaPowerOff,
   FaSync,
 } from "react-icons/fa";
-import { cancelPower, refreshState, sendPower, wakeMachine } from "./api";
+import {
+  cancelPower,
+  getErrorLog,
+  refreshState,
+  selectMachine,
+  sendPower,
+  wakeMachine,
+} from "./api";
+import { ErrorLogModal } from "./ErrorLogModal";
 import {
   countdownPercent,
   formatStateLabel,
+  machineOptionLabel,
   needsConfirmation,
   offerLabel,
 } from "./model";
@@ -31,6 +43,24 @@ interface MachineViewProps {
   onUpdated: (next: MachineSnapshot) => void;
   onOpenSettings: () => void;
 }
+
+const VISUALLY_HIDDEN = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+} as const;
+
+const ICON_BUTTON_STYLE = {
+  flex: 1,
+  minWidth: 0,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "10px 0",
+} as const;
 
 function statusIcon(snapshot: MachineSnapshot) {
   switch (snapshot.phase) {
@@ -56,31 +86,23 @@ export function MachineView({
   onOpenSettings,
 }: MachineViewProps) {
   const [busy, setBusy] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+  // Only thrown RPC failures land here; refused actions arrive as snapshot.attention.
+  const [rpcError, setRpcError] = useState<string | null>(null);
+
+  const machineId = snapshot.selected_id;
 
   const runAction = async (
     label: string,
     fn: () => Promise<ActionResponse>,
   ) => {
     setBusy(true);
-    setActionError(null);
+    setRpcError(null);
     try {
       const res = await fn();
       onUpdated(res.state);
-      if (!res.ok) {
-        setActionError(
-          label === "Cancel"
-            ? `Cancel could not be confirmed: ${res.error ?? "request failed"}`
-            : `${label} failed: ${res.error ?? "request failed"}`,
-        );
-      }
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      setActionError(
-        label === "Cancel"
-          ? `Cancel could not be confirmed: ${detail}`
-          : `${label} failed: ${detail}`,
-      );
+      setRpcError(`${label} failed: ${detail}`);
     } finally {
       setBusy(false);
     }
@@ -88,15 +110,15 @@ export function MachineView({
 
   const handleOffer = (offer: Offer) => {
     if (offer === "wake") {
-      void runAction("Wake", wakeMachine);
+      void runAction("Wake", () => wakeMachine(machineId));
       return;
     }
     if (offer === "cancel") {
-      void runAction("Cancel", cancelPower);
+      void runAction("Cancel", () => cancelPower(machineId));
       return;
     }
     if (offer === "sleep") {
-      void runAction("Sleep", () => sendPower("sleep"));
+      void runAction("Sleep", () => sendPower("sleep", machineId));
       return;
     }
     if (needsConfirmation(offer)) {
@@ -116,7 +138,7 @@ export function MachineView({
           bDestructiveWarning={true}
           onOK={() => {
             void runAction(isRestart ? "Restart" : "Shut down", () =>
-              sendPower(offer),
+              sendPower(offer, machineId),
             );
           }}
         />,
@@ -126,44 +148,133 @@ export function MachineView({
 
   const handleRefresh = async () => {
     setBusy(true);
-    setActionError(null);
+    setRpcError(null);
     try {
       const next = await refreshState();
       onUpdated(next);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
+      setRpcError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
   };
 
-  if (!snapshot.configured) {
+  const handleSelect = async (nextId: string) => {
+    if (nextId === machineId) return;
+    setRpcError(null);
+    try {
+      const res = await selectMachine(nextId);
+      onUpdated(res.state);
+    } catch (err) {
+      setRpcError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const openErrorLog = async () => {
+    try {
+      const res = await getErrorLog();
+      showModal(<ErrorLogModal entries={res.entries} />);
+    } catch (err) {
+      setRpcError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const attention = rpcError
+    ? { message: rpcError }
+    : snapshot.attention;
+
+  const attentionRows = attention ? (
+    <>
+      <PanelSectionRow>
+        <Field
+          label="Needs attention"
+          description={attention.message}
+          bottomSeparator="none"
+        />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ButtonItem layout="below" bottomSeparator="none" onClick={openErrorLog}>
+          View error log
+        </ButtonItem>
+      </PanelSectionRow>
+    </>
+  ) : null;
+
+  const bottomRow = (
+    <PanelSection>
+      <PanelSectionRow>
+        <div style={{ display: "flex", gap: 8, width: "100%" }}>
+          <DialogButton
+            aria-label="Refresh"
+            style={ICON_BUTTON_STYLE}
+            disabled={busy || snapshot.waiting}
+            onClick={handleRefresh}
+          >
+            <FaSync aria-hidden="true" />
+            <span style={VISUALLY_HIDDEN}>Refresh</span>
+          </DialogButton>
+          <DialogButton
+            aria-label="Settings"
+            style={ICON_BUTTON_STYLE}
+            disabled={busy}
+            onClick={onOpenSettings}
+          >
+            <FaCog aria-hidden="true" />
+            <span style={VISUALLY_HIDDEN}>Settings</span>
+          </DialogButton>
+          <DialogButton
+            aria-label="Error log"
+            style={ICON_BUTTON_STYLE}
+            onClick={openErrorLog}
+          >
+            <FaList aria-hidden="true" />
+            <span style={VISUALLY_HIDDEN}>Error log</span>
+          </DialogButton>
+        </div>
+      </PanelSectionRow>
+    </PanelSection>
+  );
+
+  if (snapshot.machines.length === 0) {
     return (
-      <PanelSection title="Machine">
-        <PanelSectionRow>
-          <Field
-            label="No machine configured"
-            description="Set your PC's hostname, MAC address, and LAN pairing key to get started."
-          />
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={onOpenSettings}>
-            Configure Machine
-          </ButtonItem>
-        </PanelSectionRow>
-      </PanelSection>
+      <>
+        {attentionRows}
+        <PanelSection title="Machine">
+          <PanelSectionRow>
+            <Field
+              label="No machine configured"
+              description="Set your PC's hostname, MAC address, and LAN pairing key to get started."
+            />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" bottomSeparator="none" onClick={onOpenSettings}>
+              Configure Machine
+            </ButtonItem>
+          </PanelSectionRow>
+        </PanelSection>
+        {bottomRow}
+      </>
     );
   }
 
   const label = formatStateLabel(snapshot, nowMs);
   const subtitle = `LAN · ${snapshot.machine.host}:${snapshot.machine.daemon_port}`;
-  const unreachablePending =
-    snapshot.phase === "pending" && !snapshot.reachable;
-  const visibleError = actionError ?? snapshot.error;
+  const machineOptions = snapshot.machines.map((machine) => ({
+    data: machine.id,
+    label: machineOptionLabel(machine, nowMs),
+  }));
 
   return (
     <>
-      <PanelSection title={snapshot.machine.name}>
+      <PanelSection>
+        <PanelSectionRow>
+          <Dropdown
+            rgOptions={machineOptions}
+            selectedOption={machineId}
+            onChange={(option) => void handleSelect(String(option.data))}
+          />
+        </PanelSectionRow>
+
         <PanelSectionRow>
           <Field
             label={label}
@@ -191,25 +302,13 @@ export function MachineView({
           </PanelSectionRow>
         )}
 
-        {unreachablePending && (
-          <PanelSectionRow>
-            <Field
-              label="Connection lost"
-              description="Can't reach the machine. A cancel can't be confirmed until it answers again."
-            />
-          </PanelSectionRow>
-        )}
-
-        {visibleError && (
-          <PanelSectionRow>
-            <Field label="Error" description={visibleError} />
-          </PanelSectionRow>
-        )}
+        {attentionRows}
 
         {snapshot.offers.map((offer) => (
           <PanelSectionRow key={offer}>
             <ButtonItem
               layout="below"
+              bottomSeparator="none"
               disabled={busy}
               onClick={() => handleOffer(offer)}
             >
@@ -219,26 +318,7 @@ export function MachineView({
         ))}
       </PanelSection>
 
-      <PanelSection>
-        <PanelSectionRow>
-          <ButtonItem
-            layout="below"
-            disabled={busy || snapshot.waiting}
-            onClick={handleRefresh}
-          >
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-              <FaSync /> Refresh
-            </span>
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" disabled={busy} onClick={onOpenSettings}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-              <FaCog /> Settings
-            </span>
-          </ButtonItem>
-        </PanelSectionRow>
-      </PanelSection>
+      {bottomRow}
     </>
   );
 }
