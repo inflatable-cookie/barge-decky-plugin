@@ -1,0 +1,16 @@
+{
+  "name": "Barge",
+  "author": "inflatable-cookie",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": [
+      "power",
+      "wake-on-lan",
+      "bazzite",
+      "barge"
+    ],
+    "description": "Control a Barge machine (barged) from Steam Deck Gaming Mode: state, Wake-on-LAN, sleep, restart, shut down, and cancel.",
+    "image": "https://opengraph.githubassets.com/1/inflatable-cookie/barge-decky-plugin"
+  }
+}

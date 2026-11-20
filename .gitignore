@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+out/
+backend/out/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Decky local helpers
+decky_plugin.py
+cli/
+
+# Editors and OS
+.vscode/settings.json
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+.env

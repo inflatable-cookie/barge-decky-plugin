@@ -1,0 +1,3 @@
+- Scaffold Barge Decky Loader plugin (`plugin.json`, `package.json`, `pnpm-lock.yaml`, MIT + template `LICENSE`, `AGENTS.md`, `README.md`, `CHANGELOG.md`).
+- Implement Python backend (`main.py` and `py_modules/barge_plugin/`) with LAN HMAC request signing, Wake-on-LAN UDP magic packets, state model/tracker with fast polling and timeouts, and owner-only key storage.
+- Implement TypeScript/React `@decky/ui` Quick Access panel and settings/pairing view (`src/`) plus `scripts/package.sh` and `pytest` unit/integration tests against fixed `barge-machine` Rust vectors.
