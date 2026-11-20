@@ -1,0 +1,51 @@
+{
+  "source_repo": "/Users/tom/Dev/projects/barge",
+  "barge_commit": "7f91be22be46b8629e5fe42275fa52d324f1bdaf",
+  "generated_from": "crates/barge-machine (auth::sign, auth::verify, wol::magic_packet)",
+  "hmac_cases": [
+    {
+      "name": "get_state",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "method": "GET",
+      "path": "/v1/state",
+      "timestamp": "1700000000",
+      "nonce": "00112233445566778899aabbccddeeff",
+      "body": "",
+      "signature": "ffcf51ce198fd438edfad94be9e58fb2a1a8395b78324a4521ef726fd49304f4"
+    },
+    {
+      "name": "post_power_sleep",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "method": "POST",
+      "path": "/v1/power",
+      "timestamp": "1700000042",
+      "nonce": "fedcba98765432100123456789abcdef",
+      "body": "{\"schema\":\"barge.power-request/1\",\"action\":\"sleep\",\"delay_s\":15}",
+      "signature": "dc83688a9db1735a550009ac64806beaf4fdf322c417e52d28562bb0c66aa147"
+    },
+    {
+      "name": "post_power_cancel",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "method": "POST",
+      "path": "/v1/power/cancel",
+      "timestamp": "1700000099",
+      "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "body": "{\"schema\":\"barge.power-cancel/1\"}",
+      "signature": "237038d89dbaec8b2328587b2a864fd3cb93b2d12153579eb2d9a834ab655492"
+    },
+    {
+      "name": "auth_rs_test_vector",
+      "key_hex": "0707070707070707070707070707070707070707070707070707070707070707",
+      "method": "POST",
+      "path": "/path",
+      "timestamp": "123",
+      "nonce": "nonce",
+      "body": "body",
+      "signature": "f6addd9eea7a69041e1cdb0bf00138b67d46e835267c647cde22bbc748060043"
+    }
+  ],
+  "wol_case": {
+    "mac": "00:11:22:33:44:ff",
+    "packet_hex": "ffffffffffff0011223344ff0011223344ff0011223344ff0011223344ff0011223344ff0011223344ff0011223344ff0011223344ff0011223344ff0011223344ff0011223344ff0011223344ff0011223344ff0011223344ff0011223344ff0011223344ff"
+  }
+}
