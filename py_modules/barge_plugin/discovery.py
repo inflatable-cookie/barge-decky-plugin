@@ -1,33 +1,116 @@
-"""Matching discovered `barged` instances to configured machines.
-
-Pure helpers: which configured machine a discovery answer belongs to, which
-machines moved to a new address, and a display name the settings format accepts.
-A paired machine is matched by its daemon machine ID, so a DHCP renewal updates
-the stored address instead of creating a second machine.
-"""
+"""Reconcile LAN advertisements with the configured machine list."""
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
-from typing import List, Optional, Sequence, Tuple
+from ipaddress import ip_address
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import mdns
-from .config import MachinesDocument, MachineConfig, machine_id_from_name, validate_name
+from .config import ConfigStore, MachineConfig, MachinesDocument, machine_id_from_name, validate_name
 from .errors import BargeError
+from .transport import DaemonClient, HttpTransport
+
+_DISCOVERY_STATE_TIMEOUT_S = 1.0
+
+
+async def resolve_macs(
+    doc: MachinesDocument,
+    found_list: Sequence[mdns.DiscoveredMachine],
+    store: ConfigStore,
+    transport: Optional[HttpTransport],
+) -> List[mdns.DiscoveredMachine]:
+    """Get MACs from state when a saved machine still lacks its daemon ID."""
+    credentials: List[Tuple[MachineConfig, bytes]] = []
+    known_ids = {machine.daemon_machine_id for machine in doc.machines}
+    for machine in doc.machines:
+        if machine.daemon_machine_id or not machine.mac:
+            continue
+        try:
+            key = store.read_key(machine.id)
+        except BargeError:
+            continue  # Normal polling reports settings and key errors.
+        if key is not None:
+            credentials.append((machine, key))
+    if not credentials:
+        return list(found_list)
+
+    async def resolve(found: mdns.DiscoveredMachine) -> mdns.DiscoveredMachine:
+        if found.id in known_ids or found.mac:
+            return found
+        return await asyncio.to_thread(_resolve_mac, found, credentials, transport)
+
+    return await asyncio.gather(*(resolve(found) for found in found_list))
+
+
+def _resolve_mac(
+    found: mdns.DiscoveredMachine,
+    credentials: Sequence[Tuple[MachineConfig, bytes]],
+    transport: Optional[HttpTransport],
+) -> mdns.DiscoveredMachine:
+    # mDNS does not advertise a MAC. If the state request fails, matching can
+    # still use the address and hostname.
+    for machine, key in credentials:
+        client = DaemonClient.for_lan(
+            found.address,
+            found.port,
+            key,
+            client_id=machine.client_id or None,
+            transport=transport,
+            timeout_s=_DISCOVERY_STATE_TIMEOUT_S,
+        )
+        try:
+            state = client.state()
+        except BargeError as exc:
+            if exc.kind == "unreachable":
+                break
+            continue
+        if state.machine_id == found.id and state.mac:
+            return replace(found, mac=state.mac)
+        break  # A different key cannot make this daemon report a different identity.
+    return found
 
 
 def match_machine(
     doc: MachinesDocument,
     found: mdns.DiscoveredMachine,
 ) -> Optional[MachineConfig]:
-    """The configured machine a discovery answer belongs to, by ID then by address."""
+    """Find the configured machine by ID, MAC, IP address, then mDNS hostname."""
+    return _best_match(doc, found)[0]
+
+
+def _best_match(
+    doc: MachinesDocument,
+    found: mdns.DiscoveredMachine,
+) -> Tuple[Optional[MachineConfig], int]:
+    best = None
+    highest = 0
     for machine in doc.machines:
-        if machine.daemon_machine_id and machine.daemon_machine_id == found.id:
-            return machine
-    for machine in doc.machines:
-        if machine.host == found.address and machine.daemon_port == found.port:
-            return machine
-    return None
+        priority = _match_priority(machine, found)
+        if priority > highest:
+            best, highest = machine, priority
+    return best, highest
+
+
+def _match_priority(machine: MachineConfig, found: mdns.DiscoveredMachine) -> int:
+    if machine.daemon_machine_id:
+        # A different stable ID rules out matches on weaker identifiers.
+        return 4 if machine.daemon_machine_id == found.id else 0
+    if machine.mac and machine.mac == found.mac:
+        return 3
+    try:
+        if ip_address(machine.host) == ip_address(found.address):
+            return 2
+    except ValueError:
+        pass  # A manually configured host can be a DNS name.
+    if found.hostname and _local_hostname(machine.host) == _local_hostname(found.hostname):
+        return 1
+    return 0
+
+
+def _local_hostname(hostname: str) -> str:
+    return hostname.rstrip(".").lower().removesuffix(".local")
 
 
 def sync_addresses(
@@ -35,26 +118,24 @@ def sync_addresses(
     found_list: Sequence[mdns.DiscoveredMachine],
 ) -> Tuple[MachinesDocument, List[str]]:
     """Return the document with moved machines updated, and the ids that moved."""
+    matches: Dict[str, List[Tuple[int, mdns.DiscoveredMachine]]] = {}
+    for found in found_list:
+        machine, priority = _best_match(doc, found)
+        if machine is not None:
+            matches.setdefault(machine.id, []).append((priority, found))
+
     updated: List[MachineConfig] = []
     changed: List[str] = []
     for machine in doc.machines:
-        found = _found_for(machine, found_list)
-        if found is None or (
-            machine.daemon_machine_id == found.id
-            and machine.host == found.address
-            and machine.daemon_port == found.port
-        ):
-            updated.append(machine)
-            continue
-        updated.append(
-            replace(
-                machine,
-                host=found.address,
-                daemon_port=found.port,
-                daemon_machine_id=found.id,
-            )
-        )
-        changed.append(machine.id)
+        candidates = matches.get(machine.id, [])
+        highest = max((priority for priority, _ in candidates), default=0)
+        preferred = [found for priority, found in candidates if priority == highest]
+        if len(preferred) == 1:
+            found = preferred[0]
+            if (machine.host, machine.daemon_port) != (found.address, found.port):
+                machine = replace(machine, host=found.address, daemon_port=found.port)
+                changed.append(machine.id)
+        updated.append(machine)
     if not changed:
         return doc, changed
     return MachinesDocument(machines=tuple(updated), selected_id=doc.selected_id), changed
@@ -73,18 +154,3 @@ def unique_display_name(doc: MachinesDocument, display: str) -> str:
         candidate = f"{base}-{suffix}"
         suffix += 1
     return candidate
-
-
-def _found_for(
-    machine: MachineConfig,
-    found_list: Sequence[mdns.DiscoveredMachine],
-) -> Optional[mdns.DiscoveredMachine]:
-    if machine.daemon_machine_id:
-        for found in found_list:
-            if found.id == machine.daemon_machine_id:
-                return found
-        return None
-    for found in found_list:
-        if found.address == machine.host and found.port == machine.daemon_port:
-            return found
-    return None

@@ -72,7 +72,7 @@ export function DiscoverySection({
           {discovered.length === 0 && !snapshot.discover_error && (
             <PanelSectionRow>
               <Field
-                label="No machines found yet"
+                label="No new machines found"
                 description="Start barged on the PC and keep both devices on the same network, then search again."
               />
             </PanelSectionRow>
@@ -82,26 +82,17 @@ export function DiscoverySection({
               <Field label="Search failed" description={snapshot.discover_error} />
             </PanelSectionRow>
           )}
-          {discovered.map((found) =>
-            found.added ? (
-              <PanelSectionRow key={found.id}>
-                <Field
-                  label={found.name}
-                  description={`Added · ${found.address}:${found.port}`}
-                />
-              </PanelSectionRow>
-            ) : (
-              <PanelSectionRow key={found.id}>
-                <ButtonItem
-                  layout="below"
-                  disabled={busy}
-                  onClick={() => onAdd(found.id)}
-                >
-                  {`Add ${found.name} (${found.address})`}
-                </ButtonItem>
-              </PanelSectionRow>
-            ),
-          )}
+          {discovered.map((found) => (
+            <PanelSectionRow key={found.id}>
+              <ButtonItem
+                layout="below"
+                disabled={busy}
+                onClick={() => onAdd(found.id)}
+              >
+                {`Add ${found.name} (${found.address})`}
+              </ButtonItem>
+            </PanelSectionRow>
+          ))}
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={busy} onClick={onSearch}>
               {busy ? "Searching…" : "Search Again"}

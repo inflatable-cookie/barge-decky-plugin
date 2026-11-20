@@ -15,6 +15,7 @@ wires together:
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from . import discovery, local_approval, mdns, pair_flow, protocol, wol
@@ -71,6 +72,7 @@ class BargeService:
         )
         self._local_approvals = local_approval.LocalApprovals(store, local_transport)
         self._last_store_error: Optional[str] = None
+        self._discover_lock = asyncio.Lock()
         self._poll_lock = asyncio.Lock()
         self._wake_poller = asyncio.Event()
         self._poll_task: Optional[asyncio.Task[None]] = None
@@ -129,18 +131,18 @@ class BargeService:
         return {"ok": True, "entries": self._errors.entries()}
 
     async def discover(self) -> Dict[str, Any]:
-        """Browse `_barged._tcp`, then keep addresses current by machine ID."""
-        try:
-            found = await asyncio.to_thread(self._browser.browse, self._browse_timeout_s)
-        except BargeError as exc:
-            self._discover_error = exc.message
-            snap = self.snapshot()
-            await self._emit_state(snap)
-            return {"ok": False, "error": exc.message, "state": snap}
-        self._discovered = list(found)
-        self._discover_error = None
-        self._apply_discovered_addresses()
-        self._local_approvals.invalidate()
+        """Browse `_barged._tcp` and reconcile the results with saved machines."""
+        async with self._discover_lock:
+            try:
+                found = await asyncio.to_thread(self._browser.browse, self._browse_timeout_s)
+            except BargeError as exc:
+                self._discover_error = exc.message
+                snap = self.snapshot()
+                await self._emit_state(snap)
+                return {"ok": False, "error": exc.message, "state": snap}
+            await self._reconcile_discovery(found)
+            self._discover_error = None
+            self._local_approvals.invalidate()
         snap = await self.poll_once()
         return {"ok": True, "state": snap}
 
@@ -534,6 +536,12 @@ class BargeService:
                 raise BargeError("usage", NOT_PAIRED_MESSAGE)
             client = self._build_client(config, key)
             daemon_state = await asyncio.to_thread(client.state)
+            if (
+                config.daemon_machine_id
+                and daemon_state.machine_id
+                and config.daemon_machine_id != daemon_state.machine_id
+            ):
+                raise BargeError("refused", "barged reported a different machine ID")
         except BargeError as exc:
             if epoch == self._epoch_of(config.id):
                 self._tracker(config.id).apply_poll_error(started_at_ms, exc.message, exc.kind)
@@ -571,11 +579,15 @@ class BargeService:
                 return found
         raise BargeError("usage", "that machine is no longer visible; discover again")
 
-    def _apply_discovered_addresses(self) -> None:
+    async def _reconcile_discovery(self, found: List[mdns.DiscoveredMachine]) -> None:
         """Update configured machines whose daemon reappeared at a new address."""
         try:
             doc = self._store.load()
+            self._discovered = await discovery.resolve_macs(doc, found, self._store, self._transport)
+            # Polling and settings edits can finish while the state requests are in flight.
+            doc = self._store.load()
         except BargeError as exc:
+            self._discovered = found
             self._record_store_error(exc)
             return
         updated, moved = discovery.sync_addresses(doc, self._discovered)
@@ -594,23 +606,23 @@ class BargeService:
                 self._log_info(f"{machine.name} is now at {machine.host}:{machine.daemon_port}")
 
     def _learn_from_state(self, config: MachineConfig, state: protocol.DaemonState) -> None:
-        """Record the daemon's stable ID, MAC and broadcast once a poll reports them."""
-        updates: Dict[str, str] = {}
-        if state.machine_id and state.machine_id != config.daemon_machine_id:
-            updates["daemon_machine_id"] = state.machine_id
-        if state.mac and state.mac != config.mac:
-            updates["mac"] = state.mac
-        if state.broadcast and state.broadcast != config.broadcast:
-            updates["broadcast"] = state.broadcast
-        if not updates:
+        """Fill identity and Wake-on-LAN details from a successful poll."""
+        # Older settings use the generic broadcast address when no subnet was set.
+        broadcast = config.broadcast
+        if broadcast == wol.DEFAULT_BROADCAST and state.broadcast:
+            broadcast = state.broadcast
+        updated = replace(
+            config,
+            daemon_machine_id=config.daemon_machine_id or state.machine_id,
+            mac=config.mac or state.mac or "",
+            broadcast=broadcast,
+        )
+        if updated == config:
             return
         try:
             doc = self._store.load()
-            current = doc.get(config.id)
-            if current is None:
-                return
-            merged = replace(current, **updates)
-            self._store.save(doc.upsert(merged, select=False))
+            if doc.get(config.id) == config:
+                self._store.save(doc.upsert(updated, select=False))
         except BargeError as exc:
             self._record_store_error(exc)
 
@@ -661,23 +673,11 @@ class BargeService:
         return snap
 
     def _discovered_view(self, doc: MachinesDocument) -> List[Dict[str, Any]]:
-        configured = {
-            machine.daemon_machine_id: machine
-            for machine in doc.machines
-            if machine.daemon_machine_id
-        }
-        rows: List[Dict[str, Any]] = []
-        for found in self._discovered:
-            existing = configured.get(found.id)
-            rows.append(
-                {
-                    **found.to_dict(),
-                    "added": existing is not None,
-                    "machine_id": existing.id if existing is not None else "",
-                    "paired": self._store.is_paired(existing.id) if existing is not None else False,
-                }
-            )
-        return rows
+        return [
+            found.to_dict()
+            for found in self._discovered
+            if discovery.match_machine(doc, found) is None
+        ]
 
     def _summary(self, config: MachineConfig, now: int) -> Dict[str, Any]:
         tracker = self._tracker(config.id)

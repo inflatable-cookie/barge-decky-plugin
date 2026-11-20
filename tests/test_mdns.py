@@ -95,6 +95,7 @@ def test_collector_resolves_a_machine_and_prefers_ipv4() -> None:
             protocol_version="1",
             address="192.168.1.50",
             port=9777,
+            hostname="bazzite.local",
         )
     ]
 

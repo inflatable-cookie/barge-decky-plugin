@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import stat
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from barge_plugin import mdns
 from barge_plugin.config import ConfigStore, MachineConfig, MachinesDocument
@@ -47,7 +50,6 @@ def test_pairing_approval_saves_the_key_and_learned_details(tmp_path: Path) -> N
 
             found = await svc.discover()
             assert found["ok"] is True
-            assert found["state"]["discovered"][0]["added"] is False
             assert found["state"]["discovered"][0]["id"] == fake.machine_id
 
             started = await svc.start_pairing(fake.machine_id, "Steam Deck")
@@ -65,6 +67,7 @@ def test_pairing_approval_saves_the_key_and_learned_details(tmp_path: Path) -> N
             assert approved["ok"] is True
             assert approved["pairing"]["status"] == "approved"
             assert approved["pairing"]["machine_id"]
+            assert approved["state"]["discovered"] == []
 
             local_id = approved["pairing"]["machine_id"]
             client_id = fake.pending[request_id]["client_id"]
@@ -233,38 +236,112 @@ def test_rediscovery_moves_a_paired_machine_by_its_daemon_id(tmp_path: Path) -> 
             assert machine.host == "127.0.0.2"
             assert machine.daemon_machine_id == fake.machine_id
             assert store.read_key(local_id) == key_before
-            assert moved["state"]["discovered"][0]["added"] is True
+            assert moved["state"]["discovered"] == []
 
     asyncio.run(scenario())
 
 
-def test_discovery_learns_the_daemon_id_of_a_manually_entered_machine(tmp_path: Path) -> None:
+@pytest.mark.parametrize("host", ["192.0.2.55", "BAZZITE.Local."])
+def test_legacy_machine_is_hidden_by_address_or_hostname(tmp_path: Path, host: str) -> None:
+    async def scenario() -> None:
+        store = ConfigStore(tmp_path / "settings")
+        saved = MachineConfig.validated(
+            machine_id="bazzite", name="bazzite", host=host, mac="",
+        )
+        store.save(MachinesDocument(machines=(saved,), selected_id=saved.id))
+        browser = FakeBrowser()
+        browser.machines = [
+            mdns.DiscoveredMachine(
+                id="ab" * 16,
+                name="Living Room PC",
+                mode="lan",
+                protocol_version="1",
+                address="192.0.2.55",
+                port=9788,
+                hostname="bazzite.local",
+            )
+        ]
+        svc = build_service(tmp_path / "settings", browser)
+
+        result = await svc.discover()
+
+        assert result["state"]["discovered"] == []
+        assert store.load().machines == (replace(saved, host="192.0.2.55", daemon_port=9788),)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("same_advertised_id", [True, False])
+def test_discovery_uses_reported_mac_after_a_legacy_machine_moves(
+    tmp_path: Path, same_advertised_id: bool,
+) -> None:
     async def scenario() -> None:
         with FakeBarged() as fake:
             store = ConfigStore(tmp_path / "settings")
-            store.save(
-                MachinesDocument(
-                    machines=(
-                        MachineConfig.validated(
-                            machine_id="bazzite",
-                            name="bazzite",
-                            host="127.0.0.1",
-                            daemon_port=fake.port,
-                            mac=fake.mac,
-                        ),
-                    ),
-                    selected_id="bazzite",
-                )
+            saved = MachineConfig.validated(
+                machine_id="bazzite", name="bazzite", host="127.0.0.2",
+                daemon_port=fake.port, mac=fake.mac,
             )
+            store.save(MachinesDocument(machines=(saved,), selected_id=saved.id))
+            key = bytes.fromhex("22" * 32)
+            fake.client_keys["legacy"] = key
+            store.save_key(saved.id, key.hex())
             browser = FakeBrowser()
-            browser.machines = [discovered(fake)]
+            advertisement = discovered(fake)
+            if not same_advertised_id:
+                advertisement = replace(advertisement, id="cd" * 16)
+            browser.machines = [advertisement]
             svc = build_service(tmp_path / "settings", browser)
 
-            await svc.discover()
+            result = await svc.discover()
 
-            machine = store.load().get("bazzite")
-            assert machine is not None
-            assert machine.daemon_machine_id == fake.machine_id
+            assert store.read_key(saved.id) == key
+            if same_advertised_id:
+                assert result["state"]["discovered"] == []
+                expected = replace(
+                    saved,
+                    host="127.0.0.1",
+                    daemon_machine_id=fake.machine_id,
+                    broadcast=fake.broadcast,
+                )
+                assert store.load().machines == (expected,)
+            else:
+                assert result["state"]["discovered"] == [advertisement.to_dict()]
+                assert store.load().machines == (saved,)
+
+    asyncio.run(scenario())
+
+
+def test_state_fills_missing_details_and_preserves_configured_ones(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        with FakeBarged() as fake:
+            store = ConfigStore(tmp_path / "settings")
+            saved = MachineConfig.validated(
+                machine_id="bazzite", name="bazzite", host="127.0.0.1",
+                daemon_port=fake.port, mac="",
+            )
+            store.save(MachinesDocument(machines=(saved,), selected_id=saved.id))
+            key = bytes.fromhex("22" * 32)
+            fake.client_keys["legacy"] = key
+            store.save_key(saved.id, key.hex())
+            svc = build_service(tmp_path / "settings", FakeBrowser())
+
+            learned = await svc.poll_once()
+            expected = replace(
+                saved, daemon_machine_id=fake.machine_id, mac=fake.mac, broadcast=fake.broadcast,
+            )
+            assert learned["reachable"] is True
+            assert store.load().machines == (expected,)
+
+            fake.mac = "00:11:22:33:44:ee"
+            fake.broadcast = "192.0.2.255"
+            await svc.poll_once()
+            assert store.load().machines == (expected,)
+
+            fake.machine_id = "cd" * 16
+            refused = await svc.poll_once()
+            assert refused["error"] == "barged reported a different machine ID"
+            assert store.load().machines == (expected,)
 
     asyncio.run(scenario())
 

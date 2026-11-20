@@ -47,6 +47,8 @@ class DiscoveredMachine:
     protocol_version: str
     address: str
     port: int
+    hostname: str = ""
+    mac: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -353,6 +355,7 @@ class Collector:
                 protocol_version=parts.txt.get("version", "1"),
                 address=address,
                 port=parts.port,
+                hostname=parts.target or "",
             )
         return sorted(by_id.values(), key=lambda machine: (machine.name.lower(), machine.id))
 

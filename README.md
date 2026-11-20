@@ -32,7 +32,7 @@ Control a PC running [`barged`](https://github.com/inflatable-cookie/barge/blob/
    - A terminal fallback is `barged pair --approve`.
 5. Once approved, the plugin stores its own key in `0o600` `keys/<machine-id>.key`, reads the machine's stable ID, MAC address and broadcast address from `GET /v1/state`, and selects the machine on the panel.
 
-The machine's address is matched by ID, so a DHCP renewal moves the stored address with it on the next search.
+Saved machines stay out of **Found on Your Network**. Search follows changes to their addresses using the daemon ID, then the MAC, IP address or mDNS hostname for older entries. A successful poll fills in missing machine details.
 
 ### Manual fallback
 

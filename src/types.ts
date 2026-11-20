@@ -62,9 +62,6 @@ export interface DiscoveredMachine {
   protocol_version: string;
   address: string;
   port: number;
-  added: boolean;
-  machine_id: string;
-  paired: boolean;
 }
 
 export type PairingPhase =

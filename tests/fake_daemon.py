@@ -277,7 +277,7 @@ class FakeBarged:
         headers: Dict[str, str],
         body: bytes,
     ) -> None:
-        client_id = headers.get(auth.CLIENT_ID_HEADER, "")
+        client_id = headers.get(auth.CLIENT_ID_HEADER, "legacy")
         key = self.client_keys.get(client_id)
         if key is None:
             raise _Refusal(401, "unauthorized", "unknown client")
