@@ -16,7 +16,7 @@ Control a PC running [`barged`](https://github.com/inflatable-cookie/barge/blob/
 1. Build or download `barge-decky-plugin-v<version>.zip` (see **Build and Package** below).
 2. On the Steam Deck in Gaming Mode, open **Quick Access (`...`) -> Settings -> System** and enable **Developer Mode** (under Decky settings if needed).
 3. Open **Decky Settings -> Developer -> Install Plugin from ZIP** (or **Install Plugin from URL**).
-4. Select `barge-decky-plugin-v0.2.0.zip` and confirm installation.
+4. Select `barge-decky-plugin-v0.2.1.zip` and confirm installation.
 
 ## Configure and Pair
 
@@ -56,4 +56,4 @@ Run backend unit tests:
 pytest
 ```
 
-The distributable archive is written to `out/barge-decky-plugin-v0.2.0.zip`.
+The distributable archive is written to `out/barge-decky-plugin-v0.2.1.zip`.
