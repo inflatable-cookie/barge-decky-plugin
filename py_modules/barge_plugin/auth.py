@@ -17,6 +17,7 @@ from .fs_atomic import atomic_write_owner_only
 TIMESTAMP_HEADER = "x-barge-timestamp"
 NONCE_HEADER = "x-barge-nonce"
 SIGNATURE_HEADER = "x-barge-signature"
+CLIENT_ID_HEADER = "x-barge-client-id"
 
 KEY_BYTES_LEN = 32
 NONCE_BYTES_LEN = 16

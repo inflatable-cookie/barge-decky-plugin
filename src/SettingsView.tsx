@@ -11,16 +11,18 @@ import {
 } from "@decky/ui";
 import { useEffect, useState } from "react";
 import {
+  cancelPairing,
+  discoverMachines,
   getSettings,
   importKeyFile,
   removeMachine,
   saveSettings,
+  startPairing,
   unpair,
 } from "./api";
-import type {
-  MachineSettingsRecord,
-  MachineSnapshot,
-} from "./types";
+import { ClientsSection } from "./ClientsSection";
+import { DiscoverySection } from "./DiscoverySection";
+import type { MachineSettingsRecord, MachineSnapshot } from "./types";
 
 /** New machines are edited with an empty id; this non-empty value is the dropdown's "Add machine…" option. */
 const ADD_NEW = "";
@@ -111,6 +113,44 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
     };
   }, []);
 
+  // Search once when Settings opens, so found machines appear without a tap.
+  useEffect(() => {
+    let active = true;
+    void discoverMachines()
+      .then((res) => {
+        if (!active) return;
+        onUpdated(res.state);
+        if (!res.ok && res.error) setError(res.error);
+      })
+      .catch(() => {
+        /* discovery is best effort; the Search again button retries */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Follow a pairing that finished while Settings was open.
+  const approvedMachineId =
+    snapshot.pairing?.status === "approved" ? snapshot.pairing.machine_id : "";
+  useEffect(() => {
+    if (!approvedMachineId) return;
+    let active = true;
+    void getSettings().then((res) => {
+      if (!active || !res.ok) return;
+      setMachines(res.machines);
+      const target = res.machines.find((m) => m.id === approvedMachineId);
+      if (target) {
+        setEditingId(target.id);
+        setForm(formFrom(target));
+        setLanKey("");
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [approvedMachineId]);
+
   const parseIntField = (raw: string, label: string): number | null => {
     const trimmed = raw.trim();
     if (!/^\d+$/.test(trimmed)) {
@@ -137,6 +177,29 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleSearch = () => {
+    void runBusy(async () => {
+      const res = await discoverMachines();
+      onUpdated(res.state);
+      if (!res.ok) setError(res.error ?? "Could not search the network");
+    });
+  };
+
+  const handleAdd = (discoveredId: string) => {
+    void runBusy(async () => {
+      const res = await startPairing(discoveredId, "");
+      onUpdated(res.state);
+      if (!res.ok) setError(res.error ?? "Could not start pairing");
+    });
+  };
+
+  const handleCancelPairing = () => {
+    void runBusy(async () => {
+      const res = await cancelPairing();
+      onUpdated(res.state);
+    });
   };
 
   const handleSave = () => {
@@ -205,7 +268,7 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
     showModal(
       <ConfirmModal
         strTitle={`Remove the pairing key for ${target.name}?`}
-        strDescription="This clears the stored LAN key for this machine on this Steam Deck. You will need to paste or import a key from barged pair to query state or send power actions."
+        strDescription="This clears the stored LAN key for this machine on this Steam Deck. Pair it again, or paste or import a key from barged pair, to query state or send power actions."
         strOKButtonText="Unpair"
         strCancelButtonText="Cancel"
         bDestructiveWarning={true}
@@ -263,7 +326,7 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
     ? "Paste the key below to pair this machine when you save, or import a key file after saving."
     : paired
       ? "Paired (key stored owner-only in Decky settings)"
-      : "Not paired — run barged pair on the PC and paste or import the key";
+      : "Not paired — add the machine above, or paste or import a key";
 
   return (
     <>
@@ -301,7 +364,25 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
         )}
       </PanelSection>
 
-      <PanelSection title={editing ? "Machine" : "New machine"}>
+      <DiscoverySection
+        snapshot={snapshot}
+        busy={busy}
+        onSearch={handleSearch}
+        onAdd={handleAdd}
+        onCancelPairing={handleCancelPairing}
+      />
+
+      <PanelSection title={editing ? "Machine" : "Add Manually"}>
+        <PanelSectionRow>
+          <Field
+            label={editing ? "Details" : "Manual entry"}
+            description={
+              editing
+                ? "Change this machine's address, MAC or action timing."
+                : "Use this when the machine is not found on the network."
+            }
+          />
+        </PanelSectionRow>
         <PanelSectionRow>
           <TextField
             label="Machine Name"
@@ -315,7 +396,7 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
           <TextField
             label="Host / LAN Address"
             value={form.host}
-            placeholder="bazzite.local or 192.168.1.50"
+            placeholder="192.168.1.50"
             disabled={busy}
             onChange={(e) => setForm({ ...form, host: e.target.value })}
           />
@@ -374,7 +455,11 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
         )}
       </PanelSection>
 
-      <PanelSection title="LAN Pairing">
+      {editing && paired && (
+        <ClientsSection machineId={editing.id} machineName={editing.name} />
+      )}
+
+      <PanelSection title="Manual Pairing Key (Fallback)">
         <PanelSectionRow>
           <Field label="Status" description={pairingStatus} bottomSeparator="none" />
         </PanelSectionRow>

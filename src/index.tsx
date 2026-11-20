@@ -2,7 +2,7 @@ import { definePlugin, useQuickAccessVisible } from "@decky/api";
 import { staticClasses } from "@decky/ui";
 import { useCallback, useEffect, useState } from "react";
 import { FaPowerOff } from "react-icons/fa";
-import { getState, refreshState, subscribeState } from "./api";
+import { getState, pairingStatus, refreshState, subscribeState } from "./api";
 import { MachineView } from "./MachineView";
 import { SettingsView } from "./SettingsView";
 import type { MachineSnapshot } from "./types";
@@ -19,6 +19,8 @@ const INITIAL_SNAPSHOT: MachineSnapshot = {
     broadcast: "255.255.255.255",
     wol_port: 9,
     delay_s: 15,
+    daemon_machine_id: "",
+    client_id: "",
   },
   selected_id: "",
   machines: [],
@@ -35,6 +37,10 @@ const INITIAL_SNAPSHOT: MachineSnapshot = {
   waiting: false,
   label: "Checking…",
   poll_interval_ms: 10_000,
+  discovered: [],
+  discover_error: null,
+  pairing: null,
+  this_pc: { available: false, port: 0, pending: [] },
 };
 
 function Content() {
@@ -76,6 +82,28 @@ function Content() {
       window.clearInterval(timer);
     };
   }, [qamVisible]);
+
+  // Poll a waiting pair request wherever the user is in the plugin, so the
+  // machine is saved as soon as it is approved on the other side.
+  const pairingRequestId = snapshot.pairing?.request_id ?? null;
+  const pairingPhase = snapshot.pairing?.status ?? null;
+  useEffect(() => {
+    if (pairingPhase !== "waiting") return;
+    let active = true;
+    const timer = window.setInterval(() => {
+      void pairingStatus()
+        .then((res) => {
+          if (active) applySnapshot(res.state);
+        })
+        .catch(() => {
+          /* the next tick retries; a single miss does not end the request */
+        });
+    }, 1200);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [pairingPhase, pairingRequestId, applySnapshot]);
 
   if (view === "settings") {
     return (

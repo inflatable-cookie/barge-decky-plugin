@@ -24,6 +24,8 @@ from barge_plugin.protocol import STATE_SCHEMA
 from barge_plugin.service import BargeService
 from barge_plugin.transport import HttpResponse
 
+from support import NullTransport
+
 KEY_A = "a1" * 32
 KEY_B = "b2" * 32
 AWAKE = HttpResponse(
@@ -94,6 +96,7 @@ def make_service(
         return BargeService(
             ConfigStore(settings),
             transport=transport,  # type: ignore[arg-type]
+            local_transport=NullTransport(),  # type: ignore[arg-type]
             sender=FakeSender(),  # type: ignore[arg-type]
             error_log=error_log,
         )
@@ -153,6 +156,41 @@ def test_v010_settings_migrate_in_place_and_keep_the_key(tmp_path: Path) -> None
     assert not (settings / LEGACY_CONFIG_FILENAME).exists()
     assert not (settings / LEGACY_KEY_FILENAME).exists()
     assert KEY_A not in (settings / MACHINES_FILENAME).read_text(encoding="utf-8")
+
+
+def test_v020_list_is_read_and_rewritten_with_the_daemon_fields(tmp_path: Path) -> None:
+    settings = tmp_path / "settings"
+    settings.mkdir()
+    document = {
+        "schema": "barge-decky.config/2",
+        "selected": "bazzite",
+        "machines": [
+            {
+                "id": "bazzite",
+                "name": "bazzite",
+                "host": "192.168.1.50",
+                "daemon_port": 9777,
+                "mac": "00:11:22:33:44:ff",
+                "broadcast": "192.168.1.255",
+                "wol_port": 9,
+                "delay_s": 15,
+            }
+        ],
+    }
+    (settings / MACHINES_FILENAME).write_text(json.dumps(document), encoding="utf-8")
+    store = ConfigStore(settings)
+
+    loaded = store.load()
+    machine = loaded.get("bazzite")
+
+    assert machine is not None
+    assert machine.daemon_machine_id == ""
+    assert machine.client_id == ""
+    store.save(loaded)
+    saved = json.loads((settings / MACHINES_FILENAME).read_text(encoding="utf-8"))
+    assert saved["schema"] == "barge-decky.config/3"
+    assert saved["machines"][0]["client_id"] == ""
+    assert saved["machines"][0]["daemon_machine_id"] == ""
 
 
 def test_migration_runs_once_and_later_loads_read_the_new_list(tmp_path: Path) -> None:

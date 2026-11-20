@@ -1,21 +1,29 @@
-"""Async plugin service coordinating machines, polling, Wake-on-LAN, and daemon actions.
+"""Async plugin service: machines, discovery, pairing, polling, and daemon actions.
 
 Every machine has its own state tracker, LAN key and epoch. The selected
 machine drives the panel; all configured machines are polled so the machine
 dropdown can show each one's state.
+
+The pairing surfaces are delegated to cohesive modules that this service
+wires together:
+
+- `mdns` browses `_barged._tcp`; `discovery` matches answers to machines.
+- `pair_flow` runs this Deck's pairing request and saves the approved machine.
+- `local_approval` finds this PC's own barged on loopback and decides requests.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable, Dict, Optional
+from dataclasses import replace
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from . import protocol, wol
+from . import discovery, local_approval, mdns, pair_flow, protocol, wol
 from .config import ConfigStore, MachineConfig, MachinesDocument, machine_id_from_name
 from .error_log import ErrorEntry, ErrorLog
 from .errors import BargeError
 from .state import FAST_POLL_MS, IDLE_POLL_MS, LastAction, MachineTracker, now_ms
-from .transport import DaemonClient, HttpTransport
+from .transport import DaemonClient, HttpTransport, StdlibHttpTransport
 
 EmitFn = Callable[[str, Any], Awaitable[None]]
 
@@ -24,21 +32,31 @@ UNREACHABLE = "unreachable"
 
 
 class BargeService:
-    """Coordinates state tracking, polling, Wake-on-LAN, and daemon actions."""
+    """Coordinates state tracking, polling, discovery, pairing and daemon actions."""
 
     def __init__(
         self,
         store: ConfigStore,
         *,
         transport: Optional[HttpTransport] = None,
+        local_transport: Optional[HttpTransport] = None,
         sender: Optional[wol.DatagramSender] = None,
+        browser: Optional[mdns.MdnsBrowser] = None,
+        browse_timeout_s: float = mdns.DEFAULT_BROWSE_TIMEOUT_S,
         emit_fn: Optional[EmitFn] = None,
         logger: Optional[Any] = None,
         error_log: Optional[ErrorLog] = None,
     ) -> None:
         self._store = store
         self._transport = transport
+        # Approving a pair request talks to this PC's own barged over loopback, so it
+        # keeps its own transport: the machine transport may later become Tailscale.
+        self._local_transport: HttpTransport = (
+            local_transport if local_transport is not None else StdlibHttpTransport()
+        )
         self._sender = sender
+        self._browser: mdns.MdnsBrowser = browser if browser is not None else mdns.UdpMdnsBrowser()
+        self._browse_timeout_s = browse_timeout_s
         self._emit_fn = emit_fn
         self._logger = logger
         self._trackers: Dict[str, MachineTracker] = {}
@@ -47,30 +65,45 @@ class BargeService:
         # Last poll failure per machine ("" for settings-file errors), so a machine that
         # stays unreachable logs once rather than every poll.
         self._last_poll_error: Dict[str, str] = {}
+        self._discovered: List[mdns.DiscoveredMachine] = []
+        self._discover_error: Optional[str] = None
+        self._pair_flow = pair_flow.PairFlow(
+            store, transport, on_paired=self._machine_paired
+        )
+        self._local_approvals = local_approval.LocalApprovals(store, local_transport)
+        self._last_store_error: Optional[str] = None
+        self._discover_lock = asyncio.Lock()
         self._poll_lock = asyncio.Lock()
         self._wake_poller = asyncio.Event()
         self._poll_task: Optional[asyncio.Task[None]] = None
+        self._discover_task: Optional[asyncio.Task[None]] = None
         self._stopped = False
 
     def start(self, loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
-        """Start the background polling loop."""
+        """Start the polling loop and one startup browse of the LAN."""
         if self._poll_task is not None and not self._poll_task.done():
             return
         self._stopped = False
         target_loop = loop if loop is not None else asyncio.get_running_loop()
         self._poll_task = target_loop.create_task(self._poll_loop())
+        # The panel approves this PC's pair requests, so learn its advertised
+        # port even when Settings has never been opened.
+        self._discover_task = target_loop.create_task(self._startup_discovery())
 
     async def stop(self) -> None:
-        """Stop the background polling loop cleanly."""
+        """Stop the background polling loop and startup browse cleanly."""
         self._stopped = True
         self._wake_poller.set()
-        if self._poll_task is not None:
-            self._poll_task.cancel()
+        for task_name in ("_discover_task", "_poll_task"):
+            task = getattr(self, task_name)
+            if task is None:
+                continue
+            task.cancel()
             try:
-                await self._poll_task
+                await task
             except asyncio.CancelledError:
                 pass
-            self._poll_task = None
+            setattr(self, task_name, None)
 
     def snapshot(self) -> Dict[str, Any]:
         """Return the current UI state snapshot without touching the network."""
@@ -96,6 +129,115 @@ class BargeService:
     def get_error_log(self) -> Dict[str, Any]:
         """Return the in-memory error log, newest first."""
         return {"ok": True, "entries": self._errors.entries()}
+
+    async def discover(self) -> Dict[str, Any]:
+        """Browse `_barged._tcp` and reconcile the results with saved machines."""
+        async with self._discover_lock:
+            try:
+                found = await asyncio.to_thread(self._browser.browse, self._browse_timeout_s)
+            except BargeError as exc:
+                self._discover_error = exc.message
+                snap = self.snapshot()
+                await self._emit_state(snap)
+                return {"ok": False, "error": exc.message, "state": snap}
+            await self._reconcile_discovery(found)
+            self._discover_error = None
+            self._local_approvals.invalidate()
+        snap = await self.poll_once()
+        return {"ok": True, "state": snap}
+
+    async def start_pairing(
+        self,
+        discovered_id: str,
+        client_name: str = "",
+    ) -> Dict[str, Any]:
+        """Add a discovered machine and open a pairing request with it."""
+        try:
+            found = self._find_discovered(discovered_id)
+            view = await self._pair_flow.start(found, client_name)
+        except BargeError as exc:
+            return {"ok": False, "error": exc.message, "state": self.snapshot()}
+
+        self._log_info(f"Started pairing with {found.name}; waiting for approval")
+        snap = self.snapshot()
+        await self._emit_state(snap)
+        return {"ok": True, "pairing": view, "state": snap}
+
+    async def pairing_status(self) -> Dict[str, Any]:
+        """Poll the waiting pairing request and save the machine once it is approved."""
+        session = self._pair_flow.view()
+        if session is None:
+            return {"ok": True, "pairing": None, "state": self.snapshot()}
+        if session["status"] != "waiting":
+            return {"ok": True, "pairing": session, "state": self.snapshot()}
+
+        update = await self._pair_flow.poll()
+        snap = self.snapshot()
+        await self._emit_state(snap)
+        # A transient poll miss keeps the request open; report it without ending it.
+        ok = not (update.status == "waiting" and update.error)
+        return {
+            "ok": ok,
+            "error": update.error or None,
+            "pairing": self._pair_flow.view(),
+            "state": snap,
+        }
+
+    async def cancel_pairing(self) -> Dict[str, Any]:
+        """Stop showing a waiting pairing request; barged lets it expire."""
+        session = self._pair_flow.view()
+        if session is not None and session["status"] == "waiting":
+            self._log_info(f"Cancelled pairing with {session['name']}")
+        self._pair_flow.cancel()
+        snap = self.snapshot()
+        await self._emit_state(snap)
+        return {"ok": True, "pairing": None, "state": snap}
+
+    async def get_clients(self, machine_id: str = "") -> Dict[str, Any]:
+        """List one machine's paired clients (never a key)."""
+        try:
+            config = self._resolve(machine_id)
+            client = self._require_client(config)
+            clients = await asyncio.to_thread(client.clients)
+        except BargeError as exc:
+            return {"ok": False, "error": exc.message, "clients": []}
+        return {
+            "ok": True,
+            "clients": [
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "paired_at_unix_ms": item.paired_at_unix_ms,
+                    "this_deck": item.id == config.client_id,
+                }
+                for item in clients.clients
+            ],
+        }
+
+    async def revoke_client(self, client_id: str, machine_id: str = "") -> Dict[str, Any]:
+        """Revoke one paired client on a machine and return the remaining list."""
+        try:
+            config = self._resolve(machine_id)
+            client = self._require_client(config)
+            revoked = await asyncio.to_thread(client.revoke_client, client_id)
+        except BargeError as exc:
+            return {"ok": False, "error": exc.message, "clients": []}
+        self._log_info(f"Revoked client {revoked.client_id} on {config.name}")
+        refreshed = await self.get_clients(config.id)
+        return {
+            "ok": refreshed["ok"],
+            "error": refreshed.get("error"),
+            "revoked_is_this_deck": client_id == config.client_id,
+            "clients": refreshed["clients"],
+        }
+
+    async def approve_pair(self, request_id: str) -> Dict[str, Any]:
+        """Approve a pending request on this PC's own barged."""
+        return await self._decide_pair(request_id, approve=True)
+
+    async def deny_pair(self, request_id: str) -> Dict[str, Any]:
+        """Deny a pending request on this PC's own barged."""
+        return await self._decide_pair(request_id, approve=False)
 
     async def select_machine(self, machine_id: str) -> Dict[str, Any]:
         """Remember which machine the panel shows."""
@@ -127,7 +269,8 @@ class BargeService:
     ) -> Dict[str, Any]:
         """Add (empty machine_id) or edit one machine, optionally storing its LAN key.
 
-        A newly added machine becomes the selected one.
+        A newly added machine becomes the selected one. This is the manual
+        entry fallback; discovery pairing goes through `start_pairing`.
         """
         target_id = ""
         try:
@@ -152,6 +295,8 @@ class BargeService:
                 broadcast=broadcast,
                 wol_port=int(wol_port),
                 delay_s=int(delay_s),
+                daemon_machine_id=existing.daemon_machine_id if existing is not None else "",
+                client_id=existing.client_id if existing is not None else "",
             )
             self._ensure_unique_name(doc, validated)
             is_new = existing is None
@@ -278,7 +423,7 @@ class BargeService:
         return {"ok": True, "state": self.snapshot()}
 
     async def poll_once(self) -> Dict[str, Any]:
-        """Poll GET /v1/state once for every configured machine, concurrently."""
+        """Poll every configured machine and this PC's pending pair requests, concurrently."""
         async with self._poll_lock:
             try:
                 doc = self._store.load()
@@ -286,6 +431,7 @@ class BargeService:
                 self._record_document_error(exc)
             else:
                 await asyncio.gather(*(self._poll_machine(machine) for machine in doc.machines))
+                await self._local_approvals.poll(doc, self._discovered)
             snap = self.snapshot()
             await self._emit_state(snap)
             return snap
@@ -390,6 +536,12 @@ class BargeService:
                 raise BargeError("usage", NOT_PAIRED_MESSAGE)
             client = self._build_client(config, key)
             daemon_state = await asyncio.to_thread(client.state)
+            if (
+                config.daemon_machine_id
+                and daemon_state.machine_id
+                and config.daemon_machine_id != daemon_state.machine_id
+            ):
+                raise BargeError("refused", "barged reported a different machine ID")
         except BargeError as exc:
             if epoch == self._epoch_of(config.id):
                 self._tracker(config.id).apply_poll_error(started_at_ms, exc.message, exc.kind)
@@ -399,6 +551,80 @@ class BargeService:
         if epoch == self._epoch_of(config.id):
             self._tracker(config.id).apply_poll_ok(started_at_ms, daemon_state)
             self._last_poll_error.pop(config.id, None)
+            self._learn_from_state(config, daemon_state)
+
+    async def _decide_pair(self, request_id: str, *, approve: bool) -> Dict[str, Any]:
+        try:
+            client_name = await self._local_approvals.decide(request_id, approve)
+        except BargeError as exc:
+            return {"ok": False, "error": exc.message, "state": self.snapshot()}
+
+        verb = "Approved" if approve else "Denied"
+        detail = f" for {client_name}" if client_name else ""
+        self._log_info(f"{verb} pairing request {request_id}{detail}")
+        snap = self.snapshot()
+        await self._emit_state(snap)
+        return {
+            "ok": True,
+            "approved": approve,
+            "client_name": client_name,
+            "state": snap,
+        }
+
+    def _find_discovered(self, discovered_id: str) -> mdns.DiscoveredMachine:
+        if not protocol.is_machine_id(discovered_id):
+            raise BargeError("usage", "that machine is not a valid discovery id")
+        for found in self._discovered:
+            if found.id == discovered_id:
+                return found
+        raise BargeError("usage", "that machine is no longer visible; discover again")
+
+    async def _reconcile_discovery(self, found: List[mdns.DiscoveredMachine]) -> None:
+        """Update configured machines whose daemon reappeared at a new address."""
+        try:
+            doc = self._store.load()
+            self._discovered = await discovery.resolve_macs(doc, found, self._store, self._transport)
+            # Polling and settings edits can finish while the state requests are in flight.
+            doc = self._store.load()
+        except BargeError as exc:
+            self._discovered = found
+            self._record_store_error(exc)
+            return
+        updated, moved = discovery.sync_addresses(doc, self._discovered)
+        if not moved:
+            return
+        try:
+            self._store.save(updated)
+        except BargeError as exc:
+            self._record_store_error(exc)
+            return
+        for machine_id in moved:
+            machine = updated.get(machine_id)
+            self._tracker(machine_id).reset()
+            self._bump(machine_id)
+            if machine is not None:
+                self._log_info(f"{machine.name} is now at {machine.host}:{machine.daemon_port}")
+
+    def _learn_from_state(self, config: MachineConfig, state: protocol.DaemonState) -> None:
+        """Fill identity and Wake-on-LAN details from a successful poll."""
+        # Older settings use the generic broadcast address when no subnet was set.
+        broadcast = config.broadcast
+        if broadcast == wol.DEFAULT_BROADCAST and state.broadcast:
+            broadcast = state.broadcast
+        updated = replace(
+            config,
+            daemon_machine_id=config.daemon_machine_id or state.machine_id,
+            mac=config.mac or state.mac or "",
+            broadcast=broadcast,
+        )
+        if updated == config:
+            return
+        try:
+            doc = self._store.load()
+            if doc.get(config.id) == config:
+                self._store.save(doc.upsert(updated, select=False))
+        except BargeError as exc:
+            self._record_store_error(exc)
 
     def _compose(
         self,
@@ -432,11 +658,26 @@ class BargeService:
 
         machines = [self._summary(machine, now) for machine in doc.machines]
         intervals = [FAST_POLL_MS if item["waiting"] else IDLE_POLL_MS for item in machines]
+        if self._pair_flow.is_waiting():
+            intervals.append(FAST_POLL_MS)
+        if self._local_approvals.has_pending():
+            intervals.append(FAST_POLL_MS)
         snap["selected_id"] = selected.id if selected is not None else ""
         snap["machines"] = machines
         snap["attention"] = attention
         snap["poll_interval_ms"] = min(intervals) if intervals else IDLE_POLL_MS
+        snap["discovered"] = self._discovered_view(doc)
+        snap["discover_error"] = self._discover_error
+        snap["pairing"] = self._pair_flow.view()
+        snap["this_pc"] = self._local_approvals.view()
         return snap
+
+    def _discovered_view(self, doc: MachinesDocument) -> List[Dict[str, Any]]:
+        return [
+            found.to_dict()
+            for found in self._discovered
+            if discovery.match_machine(doc, found) is None
+        ]
 
     def _summary(self, config: MachineConfig, now: int) -> Dict[str, Any]:
         tracker = self._tracker(config.id)
@@ -464,6 +705,13 @@ class BargeService:
         if tracker.error is None or tracker.error_kind == UNREACHABLE:
             return None
         return {"message": tracker.error}
+
+    def _machine_paired(self, config: MachineConfig, client_id: str) -> None:
+        """Bookkeeping after PairFlow saved an approved machine."""
+        self._tracker(config.id).reset()
+        self._bump(config.id)
+        self._log_info(f"Paired {config.name} as client {client_id}")
+        self._wake_poller.set()
 
     @staticmethod
     def _ensure_unique_name(doc: MachinesDocument, config: MachineConfig) -> None:
@@ -503,6 +751,7 @@ class BargeService:
             host=config.host,
             port=config.daemon_port,
             key=key,
+            client_id=config.client_id or None,
             transport=self._transport,
         )
 
@@ -526,6 +775,13 @@ class BargeService:
         self._last_poll_error[""] = exc.message
         self._add_error("", "", exc.kind, exc.message)
 
+    def _record_store_error(self, exc: BargeError) -> None:
+        """Log a failed settings write once per distinct message, without flooding the log."""
+        if self._last_store_error == exc.message:
+            return
+        self._last_store_error = exc.message
+        self._add_error("", "", exc.kind, exc.message)
+
     def _record_action_error(self, config: MachineConfig, exc: BargeError) -> None:
         self._add_error(config.id, config.name, exc.kind, exc.message)
 
@@ -539,6 +795,15 @@ class BargeService:
                 message=message,
             )
         )
+
+    async def _startup_discovery(self) -> None:
+        """Browse once at startup; a failure is recorded in the snapshot, not raised."""
+        try:
+            await self.discover()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # a browser failure must not kill the poll loop
+            self._discover_error = str(exc) or "mDNS browse failed"
 
     async def _poll_loop(self) -> None:
         while not self._stopped:

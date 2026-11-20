@@ -14,6 +14,8 @@ from barge_plugin.protocol import STATE_SCHEMA
 from barge_plugin.service import BargeService
 from barge_plugin.transport import HttpResponse
 
+from support import NullTransport
+
 
 class RecordingLogger:
     def __init__(self) -> None:
@@ -107,6 +109,7 @@ def test_service_never_logs_or_exposes_key_and_handles_optimistic_actions(tmp_pa
         svc = BargeService(
             store,
             transport=transport,
+            local_transport=NullTransport(),  # type: ignore[arg-type]
             sender=sender,
             emit_fn=emit,
             logger=logger,
@@ -199,7 +202,11 @@ def test_wake_failure_rolls_back_to_offline(tmp_path: Path) -> None:
                 selected_id="bazzite",
             )
         )
-        svc = BargeService(store, sender=FakeWolSender(error=OSError("no route")))
+        svc = BargeService(
+            store,
+            local_transport=NullTransport(),  # type: ignore[arg-type]
+            sender=FakeWolSender(error=OSError("no route")),
+        )
         await svc.poll_once()
         res = await svc.wake()
         assert res["ok"] is False

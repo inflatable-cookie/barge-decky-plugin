@@ -50,6 +50,38 @@ class Plugin:
         """Return every machine's configuration and pairing flag (never a key)."""
         return self.service.get_settings()
 
+    async def discover_machines(self) -> Dict[str, Any]:
+        """Browse `_barged._tcp` and return found machines plus the refreshed state."""
+        return await self.service.discover()
+
+    async def start_pairing(self, discovered_id: str, client_name: str = "") -> Dict[str, Any]:
+        """Start pairing with a discovered machine and return the six-digit code."""
+        return await self.service.start_pairing(discovered_id, client_name)
+
+    async def pairing_status(self) -> Dict[str, Any]:
+        """Check the waiting pairing request; saves the machine once approved."""
+        return await self.service.pairing_status()
+
+    async def cancel_pairing(self) -> Dict[str, Any]:
+        """Stop showing the waiting pairing request."""
+        return await self.service.cancel_pairing()
+
+    async def get_clients(self, machine_id: str = "") -> Dict[str, Any]:
+        """List a machine's paired clients (default: selected)."""
+        return await self.service.get_clients(machine_id)
+
+    async def revoke_client(self, client_id: str, machine_id: str = "") -> Dict[str, Any]:
+        """Revoke a paired client on a machine (default: selected)."""
+        return await self.service.revoke_client(client_id, machine_id)
+
+    async def approve_pair(self, request_id: str) -> Dict[str, Any]:
+        """Approve a pairing request on this PC's own barged."""
+        return await self.service.approve_pair(request_id)
+
+    async def deny_pair(self, request_id: str) -> Dict[str, Any]:
+        """Deny a pairing request on this PC's own barged."""
+        return await self.service.deny_pair(request_id)
+
     async def get_error_log(self) -> Dict[str, Any]:
         """Return the in-memory error log, newest first."""
         return self.service.get_error_log()

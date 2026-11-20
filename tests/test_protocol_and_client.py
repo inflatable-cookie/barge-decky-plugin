@@ -175,12 +175,12 @@ def test_unknown_schema_is_refused_as_unknown_state() -> None:
         client = DaemonClient.for_lan("127.0.0.1", server.server_address[1], key)
         stub.next_override = (
             200,
-            b'{"schema":"barge.machine-state/2","power":"awake","observed_at_unix_ms":1}',
+            b'{"schema":"barge.machine-state/9","power":"awake","observed_at_unix_ms":1}',
         )
         with pytest.raises(BargeError) as exc_info:
             client.state()
         assert exc_info.value.kind == "unknown_state"
-        assert "barge.machine-state/2" in exc_info.value.message
+        assert "barge.machine-state/9" in exc_info.value.message
     finally:
         server.shutdown()
         server.server_close()

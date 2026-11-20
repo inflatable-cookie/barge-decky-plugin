@@ -17,6 +17,9 @@ from .errors import BargeError, ErrorKind
 STATE_PATH = "/v1/state"
 POWER_PATH = "/v1/power"
 CANCEL_PATH = "/v1/power/cancel"
+PAIR_PATH = "/v1/pair"
+PAIR_PENDING_PATH = "/v1/pair/pending"
+CLIENTS_PATH = "/v1/clients"
 DEFAULT_TIMEOUT_S = 5.0
 _REFUSED_STATUSES = frozenset((400, 401, 403, 405, 409, 413))
 
@@ -53,24 +56,32 @@ class AuthStrategy(Protocol):
 
 
 class NoopAuth:
-    """Unauthenticated/network-identity auth (e.g. Tailscale)."""
+    """Unauthenticated/network-identity auth (Tailscale, or localhost approval)."""
 
     def headers(self, method: str, path: str, body: bytes) -> Dict[str, str]:
         return {}
 
 
 class LanHmacAuth:
-    """LAN shared-key HMAC request signer matching barge-machine."""
+    """LAN per-client HMAC request signer matching barge-machine.
+
+    The client ID travels in `x-barge-client-id` so the daemon picks the
+    matching key; it is not part of the signed payload.
+    """
 
     def __init__(
         self,
         key: bytes,
+        client_id: Optional[str] = None,
         clock_s: Optional[Callable[[], int]] = None,
         nonce_fn: Optional[Callable[[], str]] = None,
     ) -> None:
         if not key:
             raise BargeError("usage", "LAN key must not be empty")
+        if client_id:
+            protocol.validate_path_segment(client_id, "client id")
         self._key = key
+        self._client_id = client_id or ""
         self._clock_s = clock_s if clock_s is not None else (lambda: int(time.time()))
         self._nonce_fn = nonce_fn if nonce_fn is not None else auth.generate_nonce
 
@@ -78,11 +89,14 @@ class LanHmacAuth:
         timestamp = str(self._clock_s())
         nonce = self._nonce_fn()
         signature = auth.sign_request(self._key, method, path, timestamp, nonce, body)
-        return {
+        headers = {
             auth.TIMESTAMP_HEADER: timestamp,
             auth.NONCE_HEADER: nonce,
             auth.SIGNATURE_HEADER: signature,
         }
+        if self._client_id:
+            headers[auth.CLIENT_ID_HEADER] = self._client_id
+        return headers
 
 
 class StdlibHttpTransport:
@@ -125,7 +139,7 @@ class StdlibHttpTransport:
 
 
 class DaemonClient:
-    """Client for barged's three HTTP endpoints."""
+    """Client for barged's state, power, pairing and client-management endpoints."""
 
     def __init__(
         self,
@@ -149,17 +163,29 @@ class DaemonClient:
         host: str,
         port: int,
         key: bytes,
+        client_id: Optional[str] = None,
         transport: Optional[HttpTransport] = None,
         timeout_s: float = DEFAULT_TIMEOUT_S,
     ) -> DaemonClient:
-        """Build a LAN-authenticated client."""
+        """Build a LAN-authenticated client for one paired client key."""
         return cls(
             host=host,
             port=port,
-            auth_strategy=LanHmacAuth(key),
+            auth_strategy=LanHmacAuth(key, client_id),
             transport=transport,
             timeout_s=timeout_s,
         )
+
+    @classmethod
+    def for_lan_unauthenticated(
+        cls,
+        host: str,
+        port: int,
+        transport: Optional[HttpTransport] = None,
+        timeout_s: float = DEFAULT_TIMEOUT_S,
+    ) -> DaemonClient:
+        """Build a client for the unauthenticated pairing endpoints."""
+        return cls(host=host, port=port, transport=transport, timeout_s=timeout_s)
 
     @property
     def base_url(self) -> str:
@@ -199,6 +225,63 @@ class DaemonClient:
         )
         self._check_status(response)
         return protocol.decode_cancel_result(response.body)
+
+    def start_pair(self, client_name: str, public_key_hex: str) -> protocol.PairResponse:
+        """POST /v1/pair (unauthenticated)."""
+        body = protocol.encode_pair_request(client_name, public_key_hex)
+        response = self._call("POST", PAIR_PATH, body, {"content-type": "application/json"})
+        self._check_status(response)
+        return protocol.decode_pair_response(response.body)
+
+    def pair_status(self, request_id: str) -> protocol.PairStatusResponse:
+        """GET /v1/pair/<request_id> (unauthenticated)."""
+        protocol.validate_path_segment(request_id, "request_id")
+        response = self._call("GET", f"{PAIR_PATH}/{request_id}", b"", {})
+        self._check_status(response)
+        return protocol.decode_pair_status(response.body)
+
+    def pending_pairs(self) -> protocol.PendingPairList:
+        """GET /v1/pair/pending (signed, or unsigned from localhost)."""
+        response = self._call("GET", PAIR_PENDING_PATH, b"", {})
+        self._check_status(response)
+        return protocol.decode_pending_pairs(response.body)
+
+    def approve_pair(self, request_id: str) -> protocol.PairApproved:
+        """POST /v1/pair/<request_id>/approve (signed, or unsigned from localhost)."""
+        protocol.validate_path_segment(request_id, "request_id")
+        response = self._call(
+            "POST",
+            f"{PAIR_PATH}/{request_id}/approve",
+            protocol.encode_pair_decision(),
+            {"content-type": "application/json"},
+        )
+        self._check_status(response)
+        return protocol.decode_pair_approved(response.body)
+
+    def deny_pair(self, request_id: str) -> protocol.PairDenied:
+        """POST /v1/pair/<request_id>/deny (signed, or unsigned from localhost)."""
+        protocol.validate_path_segment(request_id, "request_id")
+        response = self._call(
+            "POST",
+            f"{PAIR_PATH}/{request_id}/deny",
+            protocol.encode_pair_decision(),
+            {"content-type": "application/json"},
+        )
+        self._check_status(response)
+        return protocol.decode_pair_denied(response.body)
+
+    def clients(self) -> protocol.ClientList:
+        """GET /v1/clients (signed)."""
+        response = self._call("GET", CLIENTS_PATH, b"", {})
+        self._check_status(response)
+        return protocol.decode_clients(response.body)
+
+    def revoke_client(self, client_id: str) -> protocol.ClientRevoked:
+        """DELETE /v1/clients/<client_id> (signed)."""
+        protocol.validate_path_segment(client_id, "client id")
+        response = self._call("DELETE", f"{CLIENTS_PATH}/{client_id}", b"", {})
+        self._check_status(response)
+        return protocol.decode_client_revoked(response.body)
 
     def _call(
         self,

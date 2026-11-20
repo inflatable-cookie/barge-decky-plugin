@@ -10,7 +10,7 @@
       "bazzite",
       "barge"
     ],
-    "description": "Control a Barge machine (barged) from Steam Deck Gaming Mode: state, Wake-on-LAN, sleep, restart, shut down, and cancel.",
+    "description": "Find and pair with a Barge machine (barged) from Steam Deck Gaming Mode: state, Wake-on-LAN, sleep, restart, shut down and cancel, with pairing approved on the PC.",
     "image": "https://opengraph.githubassets.com/1/inflatable-cookie/barge-decky-plugin"
   }
 }
