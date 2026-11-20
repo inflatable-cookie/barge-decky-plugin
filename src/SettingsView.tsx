@@ -267,15 +267,17 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
 
   return (
     <>
-      <PanelSection>
+      <PanelSection title="Machines">
         <PanelSectionRow>
-          <ButtonItem layout="below" disabled={busy} onClick={onBack}>
+          <ButtonItem
+            layout="below"
+            bottomSeparator="none"
+            disabled={busy}
+            onClick={onBack}
+          >
             Back
           </ButtonItem>
         </PanelSectionRow>
-      </PanelSection>
-
-      <PanelSection title="Machines">
         <PanelSectionRow>
           <Dropdown
             rgOptions={machineOptions}
@@ -374,7 +376,7 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
 
       <PanelSection title="LAN Pairing">
         <PanelSectionRow>
-          <Field label="Status" description={pairingStatus} />
+          <Field label="Status" description={pairingStatus} bottomSeparator="none" />
         </PanelSectionRow>
         <PanelSectionRow>
           <TextField
@@ -389,6 +391,7 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
         <PanelSectionRow>
           <ButtonItem
             layout="below"
+            bottomSeparator="none"
             disabled={busy || !editing}
             onClick={handleImportKeyFile}
           >
@@ -397,16 +400,23 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
         </PanelSectionRow>
         {paired && (
           <PanelSectionRow>
-            <ButtonItem layout="below" disabled={busy} onClick={handleUnpair}>
+            <ButtonItem
+              layout="below"
+              bottomSeparator="none"
+              disabled={busy}
+              onClick={handleUnpair}
+            >
               Unpair…
             </ButtonItem>
           </PanelSectionRow>
         )}
-      </PanelSection>
-
-      <PanelSection>
         <PanelSectionRow>
-          <ButtonItem layout="below" disabled={busy} onClick={handleSave}>
+          <ButtonItem
+            layout="below"
+            bottomSeparator="none"
+            disabled={busy}
+            onClick={handleSave}
+          >
             {busy ? "Saving…" : editing ? "Save Machine" : "Add Machine"}
           </ButtonItem>
         </PanelSectionRow>

@@ -62,6 +62,12 @@ const ICON_BUTTON_STYLE = {
   padding: "10px 0",
 } as const;
 
+const VIEW_STYLE = {
+  display: "flex",
+  flexDirection: "column",
+  minHeight: "100%",
+} as const;
+
 function statusIcon(snapshot: MachineSnapshot) {
   switch (snapshot.phase) {
     case "awake":
@@ -201,43 +207,41 @@ export function MachineView({
   ) : null;
 
   const bottomRow = (
-    <PanelSection>
-      <PanelSectionRow>
-        <div style={{ display: "flex", gap: 8, width: "100%" }}>
-          <DialogButton
-            aria-label="Refresh"
-            style={ICON_BUTTON_STYLE}
-            disabled={busy || snapshot.waiting}
-            onClick={handleRefresh}
-          >
-            <FaSync aria-hidden="true" />
-            <span style={VISUALLY_HIDDEN}>Refresh</span>
-          </DialogButton>
-          <DialogButton
-            aria-label="Settings"
-            style={ICON_BUTTON_STYLE}
-            disabled={busy}
-            onClick={onOpenSettings}
-          >
-            <FaCog aria-hidden="true" />
-            <span style={VISUALLY_HIDDEN}>Settings</span>
-          </DialogButton>
-          <DialogButton
-            aria-label="Error log"
-            style={ICON_BUTTON_STYLE}
-            onClick={openErrorLog}
-          >
-            <FaList aria-hidden="true" />
-            <span style={VISUALLY_HIDDEN}>Error log</span>
-          </DialogButton>
-        </div>
-      </PanelSectionRow>
-    </PanelSection>
+    <div style={{ marginTop: "auto", padding: "8px 16px" }}>
+      <div style={{ display: "flex", gap: 8, width: "100%" }}>
+        <DialogButton
+          aria-label="Refresh"
+          style={ICON_BUTTON_STYLE}
+          disabled={busy || snapshot.waiting}
+          onClick={handleRefresh}
+        >
+          <FaSync aria-hidden="true" />
+          <span style={VISUALLY_HIDDEN}>Refresh</span>
+        </DialogButton>
+        <DialogButton
+          aria-label="Settings"
+          style={ICON_BUTTON_STYLE}
+          disabled={busy}
+          onClick={onOpenSettings}
+        >
+          <FaCog aria-hidden="true" />
+          <span style={VISUALLY_HIDDEN}>Settings</span>
+        </DialogButton>
+        <DialogButton
+          aria-label="Error log"
+          style={ICON_BUTTON_STYLE}
+          onClick={openErrorLog}
+        >
+          <FaList aria-hidden="true" />
+          <span style={VISUALLY_HIDDEN}>Error log</span>
+        </DialogButton>
+      </div>
+    </div>
   );
 
   if (snapshot.machines.length === 0) {
     return (
-      <>
+      <div style={VIEW_STYLE}>
         {attentionRows}
         <PanelSection title="Machine">
           <PanelSectionRow>
@@ -253,7 +257,7 @@ export function MachineView({
           </PanelSectionRow>
         </PanelSection>
         {bottomRow}
-      </>
+      </div>
     );
   }
 
@@ -265,7 +269,7 @@ export function MachineView({
   }));
 
   return (
-    <>
+    <div style={VIEW_STYLE}>
       <PanelSection>
         <PanelSectionRow>
           <Dropdown
@@ -319,6 +323,6 @@ export function MachineView({
       </PanelSection>
 
       {bottomRow}
-    </>
+    </div>
   );
 }
