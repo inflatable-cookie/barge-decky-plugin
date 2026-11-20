@@ -2,6 +2,7 @@ import type {
   MachineSnapshot,
   MachineSummary,
   Offer,
+  PairingSession,
   Phase,
   PowerActionKind,
 } from "./types";
@@ -108,4 +109,30 @@ export function countdownPercent(snapshot: MachineSnapshot, nowMs: number): numb
   const remaining = countdownSeconds(snapshot.deadline_unix_ms, nowMs);
   const ratio = Math.min(1, Math.max(0, remaining / totalSeconds));
   return Math.round(ratio * 100);
+}
+
+/** The six-digit pairing code, split for easy reading on a TV-sized screen. */
+export function formatPairingCode(code: string): string {
+  return /^\d{6}$/.test(code) ? `${code.slice(0, 3)} ${code.slice(3)}` : code;
+}
+
+/** What Settings says about a pairing request that is no longer waiting. */
+export function pairingOutcome(session: PairingSession): string {
+  switch (session.status) {
+    case "approved":
+      return `Paired with ${session.name}`;
+    case "denied":
+      return `${session.name} denied the pairing request`;
+    case "expired":
+      return "The pairing request expired — search again and add the machine";
+    case "failed":
+      return session.error || "Pairing failed";
+    default:
+      return "";
+  }
+}
+
+/** Remaining time for a pending approval on this PC. */
+export function expiresInSeconds(expiresAtMs: number, nowMs: number): number {
+  return Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1000));
 }

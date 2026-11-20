@@ -1,0 +1,6 @@
+- Find machines on the LAN with the plugin's own `_barged._tcp` mDNS browser (no `.local` resolution, no manual host entry), list them in Settings with Add, and keep a paired machine's address current by its stable machine ID.
+- Pair with a discovered machine over the X25519/HKDF exchange, showing the six-digit code and waiting for approval; read the machine ID, MAC and broadcast address from `GET /v1/state`, and keep the manual key entry and import as a fallback.
+- Approve or deny pair requests on the PC itself: when `barged` answers on localhost, the Quick Access panel shows the requester, the code and Approve / Deny.
+- List a machine's paired clients in Settings and revoke one, sending each request with this Deck's own client ID and key.
+- Send the current `barge.machine-state/2` document (machine ID, MAC and broadcast) and the pairing/client protocol documents, keeping older machine-state documents readable.
+- Bump the version to 0.3.0.

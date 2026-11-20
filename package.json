@@ -1,7 +1,7 @@
 {
   "name": "barge-decky-plugin",
-  "version": "0.2.0",
-  "description": "Decky Loader plugin to control a Barge machine (barged) from Steam Deck Gaming Mode",
+  "version": "0.3.0",
+  "description": "Decky Loader plugin to find, pair with and control a Barge machine (barged) from Steam Deck Gaming Mode",
   "type": "module",
   "scripts": {
     "build": "rollup -c",

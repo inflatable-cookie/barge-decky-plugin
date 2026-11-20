@@ -1,13 +1,16 @@
-"""Plugin machine list persistence, v0.1.0 migration, and per-machine LAN keys.
+"""Plugin machine list persistence, migrations, and per-machine LAN keys.
 
-Schema v2 (current) keeps the machine list and the remembered selection in
+Schema v3 (current) keeps the machine list and the remembered selection in
 `machines.json`. Each machine's LAN key is stored separately in
-`keys/<machine-id>.key` with owner-only (0o600) permissions.
+`keys/<machine-id>.key` with owner-only (0o600) permissions. A machine also
+records the daemon's stable ID (`daemon_machine_id`, 32 lowercase hex) and the
+client ID it was paired as (`client_id`), both learned from barged; the local
+file-safe `id` stays the plugin's own handle.
 
-Schema v1 (v0.1.0) kept one machine in `machine.json` and its key in `lan.key`.
-`ConfigStore.load()` migrates that layout in place on first use: the key is
-copied verbatim before the new list is written, and the old files are removed
-only after the new list exists.
+Schema v2 (v0.2.0) had neither field. It is read as-is, with both left empty
+until a poll or a pairing fills them in. Schema v1 (v0.1.0) kept one machine in
+`machine.json` and its key in `lan.key`; `ConfigStore.load()` migrates that
+layout in place on first use.
 """
 
 from __future__ import annotations
@@ -22,7 +25,9 @@ from . import auth, protocol, wol
 from .errors import BargeError
 from .fs_atomic import atomic_write_owner_only
 
-MACHINES_SCHEMA = "barge-decky.config/2"
+MACHINES_SCHEMA = "barge-decky.config/3"
+_PREVIOUS_MACHINES_SCHEMA = "barge-decky.config/2"
+_SUPPORTED_LIST_SCHEMAS = frozenset((MACHINES_SCHEMA, _PREVIOUS_MACHINES_SCHEMA))
 MACHINES_FILENAME = "machines.json"
 KEYS_DIRNAME = "keys"
 
@@ -80,6 +85,24 @@ def validate_port(port: int, label: str) -> int:
     return port
 
 
+def validate_client_id(client_id: str) -> str:
+    """Validate a barged client ID (empty when the machine uses a pasted shared key)."""
+    trimmed = client_id.strip()
+    if not trimmed:
+        return ""
+    return protocol.validate_path_segment(trimmed, "client id")
+
+
+def validate_daemon_machine_id(daemon_machine_id: str) -> str:
+    """Validate barged's stable machine ID (empty until a poll or pairing learns it)."""
+    trimmed = daemon_machine_id.strip()
+    if not trimmed:
+        return ""
+    if not protocol.is_machine_id(trimmed):
+        raise BargeError("usage", "machine id must be 32 lowercase hexadecimal characters")
+    return trimmed
+
+
 @dataclass(frozen=True)
 class MachineConfig:
     """One configured target machine. Its LAN key is stored separately, under `id`."""
@@ -92,11 +115,13 @@ class MachineConfig:
     broadcast: str = wol.DEFAULT_BROADCAST
     wol_port: int = wol.DEFAULT_WOL_PORT
     delay_s: int = protocol.DEFAULT_POWER_DELAY_S
+    daemon_machine_id: str = ""
+    client_id: str = ""
 
     @property
     def is_configured(self) -> bool:
-        """True when id, name, daemon host and MAC address are all set."""
-        return bool(self.id and self.name and self.host and self.mac)
+        """True when the machine has an id, a name and a reachable address."""
+        return bool(self.id and self.name and self.host)
 
     @property
     def can_wake(self) -> bool:
@@ -120,6 +145,8 @@ class MachineConfig:
         broadcast: str = wol.DEFAULT_BROADCAST,
         wol_port: int = wol.DEFAULT_WOL_PORT,
         delay_s: int = protocol.DEFAULT_POWER_DELAY_S,
+        daemon_machine_id: str = "",
+        client_id: str = "",
     ) -> MachineConfig:
         """Build and validate a MachineConfig from user input."""
         if not is_valid_machine_id(machine_id):
@@ -127,7 +154,7 @@ class MachineConfig:
         valid_name = validate_name(name)
         valid_host = validate_host(host)
         valid_daemon_port = validate_port(daemon_port, "daemon port")
-        canonical_mac = wol.format_mac(wol.parse_mac(mac))
+        canonical_mac = wol.format_mac(wol.parse_mac(mac)) if mac.strip() else ""
         valid_broadcast = wol.validate_broadcast(broadcast)
         valid_wol_port = validate_port(wol_port, "Wake-on-LAN port")
         valid_delay = protocol.validate_delay_s(delay_s)
@@ -140,6 +167,8 @@ class MachineConfig:
             broadcast=valid_broadcast,
             wol_port=valid_wol_port,
             delay_s=valid_delay,
+            daemon_machine_id=validate_daemon_machine_id(daemon_machine_id),
+            client_id=validate_client_id(client_id),
         )
 
     def to_public_dict(self) -> Dict[str, Any]:
@@ -153,6 +182,8 @@ class MachineConfig:
             "broadcast": self.broadcast,
             "wol_port": self.wol_port,
             "delay_s": self.delay_s,
+            "daemon_machine_id": self.daemon_machine_id,
+            "client_id": self.client_id,
         }
 
 
@@ -285,7 +316,7 @@ class ConfigStore:
             doc = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise BargeError("unknown_state", f"cannot parse machine settings: {exc}") from exc
-        if not isinstance(doc, dict) or doc.get("schema") != MACHINES_SCHEMA:
+        if not isinstance(doc, dict) or doc.get("schema") not in _SUPPORTED_LIST_SCHEMAS:
             raise BargeError("unknown_state", "machine settings have an unknown schema")
         entries = doc.get("machines")
         selected = doc.get("selected", "")
@@ -317,6 +348,8 @@ class ConfigStore:
                 broadcast=str(entry.get("broadcast", wol.DEFAULT_BROADCAST)),
                 wol_port=int(entry.get("wol_port", wol.DEFAULT_WOL_PORT)),
                 delay_s=int(entry.get("delay_s", protocol.DEFAULT_POWER_DELAY_S)),
+                daemon_machine_id=str(entry.get("daemon_machine_id", "")),
+                client_id=str(entry.get("client_id", "")),
             )
         except (BargeError, TypeError, ValueError) as exc:
             message = exc.message if isinstance(exc, BargeError) else str(exc)

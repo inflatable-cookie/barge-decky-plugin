@@ -23,6 +23,10 @@ export interface MachineSettings {
   broadcast: string;
   wol_port: number;
   delay_s: number;
+  /** barged's stable machine ID, empty until a poll or pairing learns it. */
+  daemon_machine_id: string;
+  /** The client ID this Deck paired as, empty for a manually imported key. */
+  client_id: string;
 }
 
 /** A machine as the Settings view edits it; `paired` says whether its LAN key is stored. */
@@ -50,6 +54,56 @@ export interface Attention {
   message: string;
 }
 
+/** A `barged` heard on the LAN that this Deck has not added. */
+export interface DiscoveredMachine {
+  id: string;
+  name: string;
+  mode: string;
+  protocol_version: string;
+  address: string;
+  port: number;
+  added: boolean;
+  machine_id: string;
+  paired: boolean;
+}
+
+export type PairingPhase =
+  | "waiting"
+  | "approved"
+  | "denied"
+  | "expired"
+  | "failed";
+
+/** One pairing request this Deck opened; the six-digit code is shown, the key is not. */
+export interface PairingSession {
+  status: PairingPhase;
+  code: string;
+  name: string;
+  address: string;
+  port: number;
+  daemon_machine_id: string;
+  request_id: string;
+  expires_at_unix_ms: number;
+  machine_id: string;
+  error: string;
+}
+
+/** A request waiting for approval on this PC's own barged. */
+export interface PendingPairRequest {
+  request_id: string;
+  client_name: string;
+  code: string;
+  created_at_unix_ms: number;
+  expires_at_unix_ms: number;
+}
+
+/** This PC's own barged, which approves other clients from the panel. */
+export interface ThisPcInfo {
+  available: boolean;
+  port: number;
+  pending: PendingPairRequest[];
+}
+
 export interface MachineSnapshot {
   configured: boolean;
   paired: boolean;
@@ -69,6 +123,10 @@ export interface MachineSnapshot {
   waiting: boolean;
   label: string;
   poll_interval_ms: number;
+  discovered: DiscoveredMachine[];
+  discover_error: string | null;
+  pairing: PairingSession | null;
+  this_pc: ThisPcInfo;
 }
 
 export interface SettingsResponse {
@@ -98,4 +156,46 @@ export interface ErrorLogEntry {
 export interface ErrorLogResponse {
   ok: boolean;
   entries: ErrorLogEntry[];
+}
+
+/** One of a machine's paired clients; `this_deck` marks the Deck showing the list. */
+export interface PairedClientRecord {
+  id: string;
+  name: string;
+  paired_at_unix_ms: number;
+  this_deck: boolean;
+}
+
+export interface DiscoveryResponse {
+  ok: boolean;
+  error?: string;
+  state: MachineSnapshot;
+}
+
+export interface PairingResponse {
+  ok: boolean;
+  error?: string;
+  pairing: PairingSession | null;
+  state: MachineSnapshot;
+}
+
+export interface PairDecisionResponse {
+  ok: boolean;
+  error?: string;
+  approved?: boolean;
+  client_name?: string;
+  state: MachineSnapshot;
+}
+
+export interface ClientsResponse {
+  ok: boolean;
+  error?: string;
+  clients: PairedClientRecord[];
+}
+
+export interface RevokeResponse {
+  ok: boolean;
+  error?: string;
+  revoked_is_this_deck?: boolean;
+  clients: PairedClientRecord[];
 }

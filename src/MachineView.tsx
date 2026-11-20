@@ -9,7 +9,7 @@ import {
   ProgressBar,
   showModal,
 } from "@decky/ui";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import {
   FaCheckCircle,
   FaCog,
@@ -20,7 +20,9 @@ import {
   FaSync,
 } from "react-icons/fa";
 import {
+  approvePair,
   cancelPower,
+  denyPair,
   getErrorLog,
   refreshState,
   selectMachine,
@@ -30,12 +32,19 @@ import {
 import { ErrorLogModal } from "./ErrorLogModal";
 import {
   countdownPercent,
+  expiresInSeconds,
+  formatPairingCode,
   formatStateLabel,
   machineOptionLabel,
   needsConfirmation,
   offerLabel,
 } from "./model";
-import type { ActionResponse, MachineSnapshot, Offer } from "./types";
+import type {
+  ActionResponse,
+  MachineSnapshot,
+  Offer,
+  PendingPairRequest,
+} from "./types";
 
 interface MachineViewProps {
   snapshot: MachineSnapshot;
@@ -88,6 +97,8 @@ export function MachineView({
   const [busy, setBusy] = useState(false);
   // Only thrown RPC failures land here; refused actions arrive as snapshot.attention.
   const [rpcError, setRpcError] = useState<string | null>(null);
+  const [pairBusyId, setPairBusyId] = useState<string | null>(null);
+  const [pairError, setPairError] = useState<string | null>(null);
 
   const machineId = snapshot.selected_id;
 
@@ -146,6 +157,23 @@ export function MachineView({
     }
   };
 
+  const decidePair = async (request: PendingPairRequest, approve: boolean) => {
+    setPairBusyId(request.request_id);
+    setPairError(null);
+    try {
+      const res = approve
+        ? await approvePair(request.request_id)
+        : await denyPair(request.request_id);
+      onUpdated(res.state);
+      if (!res.ok) setPairError(res.error ?? "Could not answer the pairing request");
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      setPairError(detail);
+    } finally {
+      setPairBusyId(null);
+    }
+  };
+
   const handleRefresh = async () => {
     setBusy(true);
     setRpcError(null);
@@ -200,6 +228,51 @@ export function MachineView({
     </>
   ) : null;
 
+  const pendingPairs = snapshot.this_pc.available ? snapshot.this_pc.pending : [];
+  const pairRequests =
+    pendingPairs.length > 0 || pairError ? (
+      <PanelSection title="Pair Requests">
+        {pairError && (
+          <PanelSectionRow>
+            <Field label="Pairing error" description={pairError} />
+          </PanelSectionRow>
+        )}
+        {pendingPairs.map((request) => (
+          <Fragment key={request.request_id}>
+            <PanelSectionRow>
+              <Field
+                label={`${request.client_name} wants to pair`}
+                description={`Code ${formatPairingCode(request.code)} · expires in ${expiresInSeconds(
+                  request.expires_at_unix_ms,
+                  nowMs,
+                )} s`}
+              />
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <div style={{ display: "flex", gap: 8, width: "100%" }}>
+                <DialogButton
+                  aria-label={`Approve ${request.client_name}`}
+                  style={{ flex: 1 }}
+                  disabled={pairBusyId !== null}
+                  onClick={() => void decidePair(request, true)}
+                >
+                  Approve
+                </DialogButton>
+                <DialogButton
+                  aria-label={`Deny ${request.client_name}`}
+                  style={{ flex: 1 }}
+                  disabled={pairBusyId !== null}
+                  onClick={() => void decidePair(request, false)}
+                >
+                  Deny
+                </DialogButton>
+              </div>
+            </PanelSectionRow>
+          </Fragment>
+        ))}
+      </PanelSection>
+    ) : null;
+
   const bottomRow = (
     <PanelSection>
       <PanelSectionRow>
@@ -238,6 +311,7 @@ export function MachineView({
   if (snapshot.machines.length === 0) {
     return (
       <>
+        {pairRequests}
         {attentionRows}
         <PanelSection title="Machine">
           <PanelSectionRow>
@@ -266,6 +340,7 @@ export function MachineView({
 
   return (
     <>
+      {pairRequests}
       <PanelSection>
         <PanelSectionRow>
           <Dropdown
