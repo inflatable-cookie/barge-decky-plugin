@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Literal, Optional
 
 from . import discovery, mdns, pairing, protocol, wol
-from .config import ConfigStore, MachineConfig, machine_id_from_name
+from .config import ConfigStore, MachineConfig, machine_id_from_name, safe_optional_host
 from .errors import BargeError
 from .transport import DaemonClient, HttpTransport
 
@@ -186,6 +186,21 @@ class PairFlow:
             else discovery.unique_display_name(doc, session.discovered.name)
         )
         try:
+            tailscale_name = safe_optional_host(
+                state.tailscale_name if state is not None else None,
+                "tailscale name",
+                existing.tailscale_name if existing is not None else "",
+            )
+            tailscale_ip = safe_optional_host(
+                state.tailscale_ip if state is not None else None,
+                "tailscale ip",
+                existing.tailscale_ip if existing is not None else "",
+            )
+            last_path = (
+                "lan"
+                if state is not None
+                else (existing.last_path if existing is not None else None)
+            )
             config = MachineConfig.validated(
                 machine_id=local_id,
                 name=display_name,
@@ -205,6 +220,9 @@ class PairFlow:
                     else session.discovered.id
                 ),
                 client_id=client_id,
+                tailscale_name=tailscale_name,
+                tailscale_ip=tailscale_ip,
+                last_path=last_path,
             )
             self._store.save_key(local_id, key.hex())
             try:

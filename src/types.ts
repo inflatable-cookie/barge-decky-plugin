@@ -14,6 +14,8 @@ export type Phase =
 
 export type Offer = "wake" | "sleep" | "restart" | "shutdown" | "cancel";
 
+export type RoutePath = "lan" | "tailscale";
+
 export interface MachineSettings {
   id: string;
   name: string;
@@ -27,6 +29,12 @@ export interface MachineSettings {
   daemon_machine_id: string;
   /** The client ID this Deck paired as, empty for a manually imported key. */
   client_id: string;
+  /** Tailscale MagicDNS name learned from barged state, empty when unset. */
+  tailscale_name: string;
+  /** Tailscale IPv4 address learned from barged state, empty when unset. */
+  tailscale_ip: string;
+  /** Last route that reached this machine, or null before first contact. */
+  last_path: RoutePath | null;
 }
 
 /** A machine as the Settings view edits it; `paired` says whether its LAN key is stored. */
@@ -124,6 +132,10 @@ export interface MachineSnapshot {
   discover_error: string | null;
   pairing: PairingSession | null;
   this_pc: ThisPcInfo;
+  /** Active or last-used route ("lan" | "tailscale"). */
+  route: RoutePath;
+  /** Hostname or IP address for the active route. */
+  route_host: string;
 }
 
 export interface SettingsResponse {

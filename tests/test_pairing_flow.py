@@ -303,6 +303,7 @@ def test_discovery_uses_reported_mac_after_a_legacy_machine_moves(
                     host="127.0.0.1",
                     daemon_machine_id=fake.machine_id,
                     broadcast=fake.broadcast,
+                    last_path="lan",
                 )
                 assert store.load().machines == (expected,)
             else:
@@ -328,7 +329,11 @@ def test_state_fills_missing_details_and_preserves_configured_ones(tmp_path: Pat
 
             learned = await svc.poll_once()
             expected = replace(
-                saved, daemon_machine_id=fake.machine_id, mac=fake.mac, broadcast=fake.broadcast,
+                saved,
+                daemon_machine_id=fake.machine_id,
+                mac=fake.mac,
+                broadcast=fake.broadcast,
+                last_path="lan",
             )
             assert learned["reachable"] is True
             assert store.load().machines == (expected,)

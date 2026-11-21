@@ -1,0 +1,5 @@
+- Reach a paired PC over Tailscale when the LAN address cannot be connected to: `MachineConfig` learns and persists `tailscale_name`, `tailscale_ip`, and `last_path` from `barged` state responses while keeping older settings files readable.
+- Try the remembered route first (default: LAN host with a 1.5 s connect timeout, then `tailscale_name`, then `tailscale_ip`). Only failures before establishing a TCP connection fall back to the next route, so power actions are never sent twice.
+- Keep discovery, pairing, client management, and Wake-on-LAN LAN-only; when all routes are unreachable, the machine shows as Offline with no new Tailscale requirement.
+- Show the active route (`LAN` or `Tailscale`) on the existing state subtitle line in the panel.
+- Bump the version to 0.4.0.

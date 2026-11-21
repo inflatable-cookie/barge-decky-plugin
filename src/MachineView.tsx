@@ -332,7 +332,9 @@ export function MachineView({
   }
 
   const label = formatStateLabel(snapshot, nowMs);
-  const subtitle = `LAN · ${snapshot.machine.host}:${snapshot.machine.daemon_port}`;
+  const routeLabel = snapshot.route === "tailscale" ? "Tailscale" : "LAN";
+  const routeHost = snapshot.route_host || snapshot.machine.host;
+  const subtitle = `${routeLabel} · ${routeHost}:${snapshot.machine.daemon_port}`;
   const machineOptions = snapshot.machines.map((machine) => ({
     data: machine.id,
     label: machineOptionLabel(machine, nowMs),

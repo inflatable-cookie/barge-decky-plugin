@@ -21,6 +21,7 @@ PAIR_PATH = "/v1/pair"
 PAIR_PENDING_PATH = "/v1/pair/pending"
 CLIENTS_PATH = "/v1/clients"
 DEFAULT_TIMEOUT_S = 5.0
+LAN_CONNECT_TIMEOUT_S = 1.5
 _REFUSED_STATUSES = frozenset((400, 401, 403, 405, 409, 413))
 
 
@@ -102,6 +103,8 @@ class LanHmacAuth:
 class StdlibHttpTransport:
     """Plain HTTP/1.1 transport backed by Python stdlib http.client."""
 
+    supports_connect_timeout = True
+
     def request(
         self,
         method: str,
@@ -111,10 +114,29 @@ class StdlibHttpTransport:
         headers: Dict[str, str],
         body: bytes,
         timeout_s: float,
+        connect_timeout_s: Optional[float] = None,
     ) -> HttpResponse:
         conn: Optional[http.client.HTTPConnection] = None
+        connect_timeout = connect_timeout_s if connect_timeout_s is not None else timeout_s
         try:
-            conn = http.client.HTTPConnection(host, port, timeout=timeout_s)
+            conn = http.client.HTTPConnection(host, port, timeout=connect_timeout)
+            conn.connect()
+        except (OSError, http.client.HTTPException, TimeoutError) as exc:
+            if conn is not None:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+            raise BargeError(
+                "unreachable",
+                f"barged at {self._format_base(host, port)} is unreachable: {exc}",
+                not_sent=True,
+            ) from exc
+
+        try:
+            if conn.sock is not None:
+                conn.sock.settimeout(timeout_s)
+            conn.timeout = timeout_s
             req_headers = {"Connection": "close", **headers}
             conn.request(method, path, body=body if body else None, headers=req_headers)
             resp = conn.getresponse()
@@ -124,6 +146,7 @@ class StdlibHttpTransport:
             raise BargeError(
                 "unreachable",
                 f"barged at {self._format_base(host, port)} is unreachable: {exc}",
+                not_sent=False,
             ) from exc
         finally:
             if conn is not None:
@@ -148,6 +171,7 @@ class DaemonClient:
         auth_strategy: Optional[AuthStrategy] = None,
         transport: Optional[HttpTransport] = None,
         timeout_s: float = DEFAULT_TIMEOUT_S,
+        connect_timeout_s: Optional[float] = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -156,6 +180,7 @@ class DaemonClient:
             transport if transport is not None else StdlibHttpTransport()
         )
         self._timeout_s = timeout_s
+        self._connect_timeout_s = connect_timeout_s
 
     @classmethod
     def for_lan(
@@ -166,6 +191,7 @@ class DaemonClient:
         client_id: Optional[str] = None,
         transport: Optional[HttpTransport] = None,
         timeout_s: float = DEFAULT_TIMEOUT_S,
+        connect_timeout_s: Optional[float] = None,
     ) -> DaemonClient:
         """Build a LAN-authenticated client for one paired client key."""
         return cls(
@@ -174,6 +200,7 @@ class DaemonClient:
             auth_strategy=LanHmacAuth(key, client_id),
             transport=transport,
             timeout_s=timeout_s,
+            connect_timeout_s=connect_timeout_s,
         )
 
     @classmethod
@@ -186,6 +213,14 @@ class DaemonClient:
     ) -> DaemonClient:
         """Build a client for the unauthenticated pairing endpoints."""
         return cls(host=host, port=port, transport=transport, timeout_s=timeout_s)
+
+    @property
+    def host(self) -> str:
+        return self._host
+
+    @property
+    def port(self) -> int:
+        return self._port
 
     @property
     def base_url(self) -> str:
@@ -291,6 +326,25 @@ class DaemonClient:
         extra_headers: Dict[str, str],
     ) -> HttpResponse:
         headers = {**extra_headers, **self._auth.headers(method, path, body)}
+        if (
+            self._connect_timeout_s is not None
+            and getattr(self._transport, "supports_connect_timeout", False)
+        ):
+            return self._transport.request(  # type: ignore[call-arg]
+                method=method,
+                host=self._host,
+                port=self._port,
+                path=path,
+                headers=headers,
+                body=body,
+                timeout_s=self._timeout_s,
+                connect_timeout_s=self._connect_timeout_s,
+            )
+        effective_timeout = (
+            min(self._timeout_s, self._connect_timeout_s)
+            if self._connect_timeout_s is not None
+            else self._timeout_s
+        )
         return self._transport.request(
             method=method,
             host=self._host,
@@ -298,7 +352,7 @@ class DaemonClient:
             path=path,
             headers=headers,
             body=body,
-            timeout_s=self._timeout_s,
+            timeout_s=effective_timeout,
         )
 
     def _check_status(self, response: HttpResponse) -> None:

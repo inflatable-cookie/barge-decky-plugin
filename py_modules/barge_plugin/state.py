@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
+from .config import RoutePath
 from .protocol import DaemonState, PowerActionKind
 
 WAKE_TIMEOUT_MS = 120_000
@@ -307,6 +308,8 @@ class MachineTracker:
         self.seen_at_ms: Optional[int] = None
         self.last_action: Optional[LastAction] = None
         self.has_polled: bool = False
+        self.route: Optional[RoutePath] = None
+        self.route_host: Optional[str] = None
         self._sending: bool = False
         self._replaced: Optional[LastAction] = None
 
@@ -319,8 +322,15 @@ class MachineTracker:
         self.seen_at_ms = None
         self.last_action = None
         self.has_polled = False
+        self.route = None
+        self.route_host = None
         self._sending = False
         self._replaced = None
+
+    def set_route(self, route: RoutePath, route_host: str) -> None:
+        """Record which route and host most recently answered."""
+        self.route = route
+        self.route_host = route_host
 
     def begin(self, action: LastAction) -> None:
         """Record an action as soon as the operator clicks, before network answers."""
@@ -362,7 +372,14 @@ class MachineTracker:
         if self.observation is not None and self.observation.pending is not None:
             self.observation = replace(self.observation, pending=None)
 
-    def apply_poll_ok(self, started_at_ms: int, state: DaemonState) -> None:
+    def apply_poll_ok(
+        self,
+        started_at_ms: int,
+        state: DaemonState,
+        *,
+        route: Optional[RoutePath] = None,
+        route_host: Optional[str] = None,
+    ) -> None:
         """Apply a successful GET /v1/state poll."""
         self.has_polled = True
         self.reachable = True
@@ -370,6 +387,9 @@ class MachineTracker:
         self.error_kind = None
         self.observation = state
         self.seen_at_ms = started_at_ms
+        if route is not None:
+            self.route = route
+            self.route_host = route_host
         if self.last_action is not None and completes(
             self.last_action, started_at_ms, True, state
         ):

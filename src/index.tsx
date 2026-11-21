@@ -21,6 +21,9 @@ const INITIAL_SNAPSHOT: MachineSnapshot = {
     delay_s: 15,
     daemon_machine_id: "",
     client_id: "",
+    tailscale_name: "",
+    tailscale_ip: "",
+    last_path: null,
   },
   selected_id: "",
   machines: [],
@@ -41,6 +44,8 @@ const INITIAL_SNAPSHOT: MachineSnapshot = {
   discover_error: null,
   pairing: null,
   this_pc: { available: false, port: 0, pending: [] },
+  route: "lan",
+  route_host: "",
 };
 
 function Content() {
