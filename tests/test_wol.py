@@ -50,9 +50,9 @@ def test_magic_packet_matches_barge_machine_vector_and_sends_102_bytes() -> None
     assert packet.hex() == case["packet_hex"]
 
     sender = FakeSender()
-    host, port, count = wol.wake(case["mac"], "192.168.1.255", 9, sender=sender)
-    assert (host, port, count) == ("192.168.1.255", 9, 102)
-    assert sender.sent == [(packet, "192.168.1.255", 9)]
+    host, port, count = wol.wake(case["mac"], "192.0.2.255", 9, sender=sender)
+    assert (host, port, count) == ("192.0.2.255", 9, 102)
+    assert sender.sent == [(packet, "192.0.2.255", 9)]
 
 
 def test_wake_rejects_bad_inputs_and_reports_send_failures() -> None:

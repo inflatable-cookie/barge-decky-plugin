@@ -387,7 +387,7 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
           <TextField
             label="Machine Name"
             value={form.name}
-            placeholder="bazzite"
+            placeholder="pc"
             disabled={busy}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
           />
@@ -396,7 +396,7 @@ export function SettingsView({ snapshot, onUpdated, onBack }: SettingsViewProps)
           <TextField
             label="Host / LAN Address"
             value={form.host}
-            placeholder="192.168.1.50"
+            placeholder="192.0.2.50"
             disabled={busy}
             onChange={(e) => setForm({ ...form, host: e.target.value })}
           />

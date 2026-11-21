@@ -62,12 +62,12 @@ class FakeWolSender:
 def test_config_store_keeps_key_separate_and_owner_only(tmp_path: Path) -> None:
     store = ConfigStore(tmp_path / "settings")
     cfg = MachineConfig.validated(
-        machine_id="bazzite",
-        name="bazzite",
-        host="bazzite.local",
+        machine_id="pc",
+        name="pc",
+        host="pc.local",
         daemon_port=9777,
         mac="00-11-22-33-44-FF",
-        broadcast="192.168.1.255",
+        broadcast="192.0.2.255",
         wol_port=9,
         delay_s=15,
     )
@@ -129,8 +129,8 @@ def test_service_never_logs_or_exposes_key_and_handles_optimistic_actions(tmp_pa
             )
         )
         saved = await svc.save_settings(
-            name="bazzite",
-            host="192.168.1.50",
+            name="pc",
+            host="192.0.2.50",
             daemon_port=9777,
             mac="00:11:22:33:44:ff",
             lan_key=key_hex,
@@ -193,13 +193,13 @@ def test_wake_failure_rolls_back_to_offline(tmp_path: Path) -> None:
             MachinesDocument(
                 machines=(
                     MachineConfig.validated(
-                        machine_id="bazzite",
-                        name="bazzite",
-                        host="192.168.1.50",
+                        machine_id="pc",
+                        name="pc",
+                        host="192.0.2.50",
                         mac="00:11:22:33:44:ff",
                     ),
                 ),
-                selected_id="bazzite",
+                selected_id="pc",
             )
         )
         svc = BargeService(

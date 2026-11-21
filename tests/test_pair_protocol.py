@@ -25,7 +25,7 @@ def state_document(**overrides: Any) -> dict:
         "observed_at_unix_ms": 1_700_000_000_000,
         "machine_id": MACHINE_ID,
         "mac": "00:11:22:33:44:FF",
-        "broadcast": "192.168.1.255",
+        "broadcast": "192.0.2.255",
     }
     doc.update(overrides)
     return doc
@@ -37,7 +37,7 @@ def test_state_v2_carries_machine_id_mac_and_broadcast() -> None:
     assert state.schema == "barge.machine-state/2"
     assert state.machine_id == MACHINE_ID
     assert state.mac == "00:11:22:33:44:ff"
-    assert state.broadcast == "192.168.1.255"
+    assert state.broadcast == "192.0.2.255"
     assert state.pending is None
 
 
@@ -63,7 +63,7 @@ def test_state_v1_is_still_read_without_the_new_fields() -> None:
         {"machine_id": "not-a-machine-id"},
         {"machine_id": "AB" * 16},
         {"mac": "00:11:22:33:44"},
-        {"broadcast": "192.168.1.300"},
+        {"broadcast": "192.0.2.300"},
         {"tailscale_name": 42},
         {"tailscale_ip": ["100.64.0.1"]},
         {"power": "sleeping"},
@@ -79,12 +79,12 @@ def test_state_carries_the_tailnet_fields() -> None:
     state = protocol.decode_state(
         document(
             state_document(
-                tailscale_name="bazzite.tail012345.ts.net",
+                tailscale_name="pc.tail012345.ts.net",
                 tailscale_ip="100.64.0.1",
             )
         )
     )
-    assert state.tailscale_name == "bazzite.tail012345.ts.net"
+    assert state.tailscale_name == "pc.tail012345.ts.net"
     assert state.tailscale_ip == "100.64.0.1"
 
     absent = protocol.decode_state(document(state_document()))

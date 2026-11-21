@@ -12,7 +12,7 @@ import pytest
 from barge_plugin import mdns
 
 MACHINE_ID = "ab" * 16
-INSTANCE = "bazzite._barged._tcp.local"
+INSTANCE = "pc._barged._tcp.local"
 
 
 def test_encode_query_sets_the_unicast_response_bit() -> None:
@@ -26,17 +26,17 @@ def test_encode_query_sets_the_unicast_response_bit() -> None:
 
 
 def test_parse_records_reads_ptr_srv_txt_and_a() -> None:
-    packet = mdns_packets.machine_response(MACHINE_ID, "Bazzite", "192.168.1.50", 9777)
+    packet = mdns_packets.machine_response(MACHINE_ID, "PC", "192.0.2.50", 9777)
 
     records = mdns.parse_records(packet)
     kinds = [record.kind for record in records]
 
     assert kinds == ["ptr", "srv", "txt", "a"]
-    assert records[0].target.startswith("bazzite._barged._tcp.local")
+    assert records[0].target.startswith("pc._barged._tcp.local")
     assert records[1].port == 9777
-    assert records[1].target.startswith("bazzite.local")
+    assert records[1].target.startswith("pc.local")
     assert dict(records[2].txt)["id"] == MACHINE_ID
-    assert records[3].address == "192.168.1.50"
+    assert records[3].address == "192.0.2.50"
 
 
 def test_parse_records_follows_compression_pointers() -> None:
@@ -45,11 +45,11 @@ def test_parse_records_follows_compression_pointers() -> None:
     records = mdns.parse_records(packet)
 
     assert [record.name for record in records] == [
-        "bazzite.local",
-        "bazzite.local",
+        "pc.local",
+        "pc.local",
     ]
     assert records[1].kind == "txt"
-    assert dict(records[1].txt)["name"] == "Bazzite"
+    assert dict(records[1].txt)["name"] == "PC"
 
 
 def test_parse_records_declines_a_query_or_truncated_packet() -> None:
@@ -73,29 +73,29 @@ def test_collector_resolves_a_machine_and_prefers_ipv4() -> None:
     packet = mdns_packets.dns_response(
         [
             mdns_packets.ptr_record(mdns.SERVICE_TYPE, instance),
-            mdns_packets.srv_record(instance, 9777, "bazzite.local."),
+            mdns_packets.srv_record(instance, 9777, "pc.local."),
             mdns_packets.txt_record(
                 instance,
-                [f"id={MACHINE_ID}", "name=Bazzite PC", "mode=lan", "version=1"],
+                [f"id={MACHINE_ID}", "name=Desk PC", "mode=lan", "version=1"],
             ),
-            mdns_packets.aaaa_record("bazzite.local.", b"\xfe\x80" + b"\x00" * 14),
-            mdns_packets.a_record("bazzite.local.", "192.168.1.50"),
+            mdns_packets.aaaa_record("pc.local.", b"\xfe\x80" + b"\x00" * 14),
+            mdns_packets.a_record("pc.local.", "192.0.2.50"),
         ]
     )
 
     collector = mdns.Collector()
-    collector.ingest(packet, "192.168.1.50")
+    collector.ingest(packet, "192.0.2.50")
     found = collector.finish()
 
     assert found == [
         mdns.DiscoveredMachine(
             id=MACHINE_ID,
-            name="Bazzite PC",
+            name="Desk PC",
             mode="lan",
             protocol_version="1",
-            address="192.168.1.50",
+            address="192.0.2.50",
             port=9777,
-            hostname="bazzite.local",
+            hostname="pc.local",
         )
     ]
 
@@ -105,27 +105,27 @@ def test_collector_ignores_a_tailscale_txt_key_and_stays_lan_only() -> None:
     packet = mdns_packets.dns_response(
         [
             mdns_packets.ptr_record(mdns.SERVICE_TYPE, instance),
-            mdns_packets.srv_record(instance, 9777, "bazzite.local."),
+            mdns_packets.srv_record(instance, 9777, "pc.local."),
             mdns_packets.txt_record(
                 instance,
                 [
                     f"id={MACHINE_ID}",
-                    "name=Bazzite PC",
+                    "name=Desk PC",
                     "mode=lan",
                     "version=1",
-                    "tailscale=bazzite.tail012345.ts.net",
+                    "tailscale=pc.tail012345.ts.net",
                 ],
             ),
-            mdns_packets.a_record("bazzite.local.", "192.168.1.50"),
+            mdns_packets.a_record("pc.local.", "192.0.2.50"),
         ]
     )
 
     collector = mdns.Collector()
-    collector.ingest(packet, "192.168.1.50")
+    collector.ingest(packet, "192.0.2.50")
     found = collector.finish()
 
     assert len(found) == 1
-    assert found[0].address == "192.168.1.50"
+    assert found[0].address == "192.0.2.50"
     assert found[0].port == 9777
     assert found[0].mode == "lan"
 
@@ -135,8 +135,8 @@ def test_collector_falls_back_to_the_source_address_and_needs_a_valid_id() -> No
     no_address = mdns_packets.dns_response(
         [
             mdns_packets.ptr_record(mdns.SERVICE_TYPE, instance),
-            mdns_packets.srv_record(instance, 9777, "bazzite.local."),
-            mdns_packets.txt_record(instance, [f"id={MACHINE_ID}", "name=Bazzite"]),
+            mdns_packets.srv_record(instance, 9777, "pc.local."),
+            mdns_packets.txt_record(instance, [f"id={MACHINE_ID}", "name=PC"]),
         ]
     )
     collector = mdns.Collector()
@@ -146,9 +146,9 @@ def test_collector_falls_back_to_the_source_address_and_needs_a_valid_id() -> No
     bad_id = mdns_packets.dns_response(
         [
             mdns_packets.ptr_record(mdns.SERVICE_TYPE, instance),
-            mdns_packets.srv_record(instance, 9777, "bazzite.local."),
-            mdns_packets.txt_record(instance, ["id=NOT-HEX", "name=Bazzite"]),
-            mdns_packets.a_record("bazzite.local.", "10.0.0.7"),
+            mdns_packets.srv_record(instance, 9777, "pc.local."),
+            mdns_packets.txt_record(instance, ["id=NOT-HEX", "name=PC"]),
+            mdns_packets.a_record("pc.local.", "10.0.0.7"),
         ]
     )
     empty = mdns.Collector()
@@ -186,12 +186,12 @@ def test_collector_asks_for_missing_srv_txt_and_address() -> None:
 
     collector.ingest(
         mdns_packets.dns_response(
-            [mdns_packets.srv_record(instance, 9777, "bazzite.local.")]
+            [mdns_packets.srv_record(instance, 9777, "pc.local.")]
         ),
         "10.0.0.7",
     )
     second = collector.missing_queries(queried_instances, queried_hosts)
-    assert ("bazzite.local", mdns.TYPE_A) in second
+    assert ("pc.local", mdns.TYPE_A) in second
     assert collector.missing_queries(queried_instances, queried_hosts) == []
 
 
@@ -200,7 +200,7 @@ def test_browse_at_reads_answers_over_loopback() -> None:
     responder.bind(("127.0.0.1", 0))
     responder.settimeout(2.0)
     target = responder.getsockname()
-    packet = mdns_packets.machine_response(MACHINE_ID, "Bazzite", "192.168.1.50", 9777)
+    packet = mdns_packets.machine_response(MACHINE_ID, "PC", "192.0.2.50", 9777)
     stop = threading.Event()
 
     def serve() -> None:
@@ -224,7 +224,7 @@ def test_browse_at_reads_answers_over_loopback() -> None:
         thread.join(timeout=3)
 
     assert [machine.id for machine in found] == [MACHINE_ID]
-    assert found[0].address == "192.168.1.50"
+    assert found[0].address == "192.0.2.50"
     assert found[0].port == 9777
 
 
