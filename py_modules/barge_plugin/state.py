@@ -360,12 +360,7 @@ class MachineTracker:
         self.error = None
         self.error_kind = None
         if self.observation is not None and self.observation.pending is not None:
-            self.observation = DaemonState(
-                schema=self.observation.schema,
-                power=self.observation.power,
-                observed_at_unix_ms=self.observation.observed_at_unix_ms,
-                pending=None,
-            )
+            self.observation = replace(self.observation, pending=None)
 
     def apply_poll_ok(self, started_at_ms: int, state: DaemonState) -> None:
         """Apply a successful GET /v1/state poll."""

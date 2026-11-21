@@ -100,6 +100,36 @@ def test_collector_resolves_a_machine_and_prefers_ipv4() -> None:
     ]
 
 
+def test_collector_ignores_a_tailscale_txt_key_and_stays_lan_only() -> None:
+    instance = INSTANCE
+    packet = mdns_packets.dns_response(
+        [
+            mdns_packets.ptr_record(mdns.SERVICE_TYPE, instance),
+            mdns_packets.srv_record(instance, 9777, "bazzite.local."),
+            mdns_packets.txt_record(
+                instance,
+                [
+                    f"id={MACHINE_ID}",
+                    "name=Bazzite PC",
+                    "mode=lan",
+                    "version=1",
+                    "tailscale=bazzite.tail012345.ts.net",
+                ],
+            ),
+            mdns_packets.a_record("bazzite.local.", "192.168.1.50"),
+        ]
+    )
+
+    collector = mdns.Collector()
+    collector.ingest(packet, "192.168.1.50")
+    found = collector.finish()
+
+    assert len(found) == 1
+    assert found[0].address == "192.168.1.50"
+    assert found[0].port == 9777
+    assert found[0].mode == "lan"
+
+
 def test_collector_falls_back_to_the_source_address_and_needs_a_valid_id() -> None:
     instance = INSTANCE
     no_address = mdns_packets.dns_response(
