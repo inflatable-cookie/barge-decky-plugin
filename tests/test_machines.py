@@ -104,17 +104,17 @@ def make_service(
     return asyncio.run(build())
 
 
-def write_legacy(settings: Path, *, name: str = "bazzite", key: Optional[str] = KEY_A) -> None:
+def write_legacy(settings: Path, *, name: str = "pc", key: Optional[str] = KEY_A) -> None:
     """Write the exact v0.1.0 on-disk layout: machine.json (schema /1) and lan.key."""
     settings.mkdir(parents=True, exist_ok=True)
     document = {
         "schema": "barge-decky.config/1",
         "machine": {
             "name": name,
-            "host": "bazzite.local",
+            "host": "pc.local",
             "daemon_port": 9777,
             "mac": "00:11:22:33:44:ff",
-            "broadcast": "192.168.1.255",
+            "broadcast": "192.0.2.255",
             "wol_port": 9,
             "delay_s": 15,
         },
@@ -145,13 +145,13 @@ def test_v010_settings_migrate_in_place_and_keep_the_key(tmp_path: Path) -> None
 
     doc = store.load()
 
-    assert doc.ids() == ["bazzite"]
-    assert doc.selected_id == "bazzite"
+    assert doc.ids() == ["pc"]
+    assert doc.selected_id == "pc"
     machine = doc.selected
     assert machine is not None
-    assert (machine.name, machine.host, machine.mac) == ("bazzite", "bazzite.local", "00:11:22:33:44:ff")
-    assert store.read_key("bazzite") == bytes.fromhex(KEY_A)
-    assert stat.S_IMODE((settings / "keys" / "bazzite.key").stat().st_mode) == 0o600
+    assert (machine.name, machine.host, machine.mac) == ("pc", "pc.local", "00:11:22:33:44:ff")
+    assert store.read_key("pc") == bytes.fromhex(KEY_A)
+    assert stat.S_IMODE((settings / "keys" / "pc.key").stat().st_mode) == 0o600
     assert (settings / MACHINES_FILENAME).exists()
     assert not (settings / LEGACY_CONFIG_FILENAME).exists()
     assert not (settings / LEGACY_KEY_FILENAME).exists()
@@ -163,15 +163,15 @@ def test_v020_list_is_read_and_rewritten_with_the_daemon_fields(tmp_path: Path) 
     settings.mkdir()
     document = {
         "schema": "barge-decky.config/2",
-        "selected": "bazzite",
+        "selected": "pc",
         "machines": [
             {
-                "id": "bazzite",
-                "name": "bazzite",
-                "host": "192.168.1.50",
+                "id": "pc",
+                "name": "pc",
+                "host": "192.0.2.50",
                 "daemon_port": 9777,
                 "mac": "00:11:22:33:44:ff",
-                "broadcast": "192.168.1.255",
+                "broadcast": "192.0.2.255",
                 "wol_port": 9,
                 "delay_s": 15,
             }
@@ -181,7 +181,7 @@ def test_v020_list_is_read_and_rewritten_with_the_daemon_fields(tmp_path: Path) 
     store = ConfigStore(settings)
 
     loaded = store.load()
-    machine = loaded.get("bazzite")
+    machine = loaded.get("pc")
 
     assert machine is not None
     assert machine.daemon_machine_id == ""
@@ -202,7 +202,7 @@ def test_migration_runs_once_and_later_loads_read_the_new_list(tmp_path: Path) -
     second = store.load()
 
     assert second == first
-    assert store.read_key("bazzite") == bytes.fromhex(KEY_A)
+    assert store.read_key("pc") == bytes.fromhex(KEY_A)
 
 
 def test_migration_without_a_legacy_key_leaves_the_machine_unpaired(tmp_path: Path) -> None:
@@ -212,8 +212,8 @@ def test_migration_without_a_legacy_key_leaves_the_machine_unpaired(tmp_path: Pa
 
     doc = store.load()
 
-    assert doc.selected is not None and doc.selected.name == "bazzite"
-    assert not store.is_paired("bazzite")
+    assert doc.selected is not None and doc.selected.name == "pc"
+    assert not store.is_paired("pc")
 
 
 def test_migration_turns_the_display_name_into_a_file_safe_id(tmp_path: Path) -> None:

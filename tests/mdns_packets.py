@@ -75,8 +75,8 @@ def machine_response(
     address: str,
     port: int,
     *,
-    instance: str = "bazzite",
-    host: str = "bazzite.local.",
+    instance: str = "pc",
+    host: str = "pc.local.",
 ) -> bytes:
     """A complete advertisement: PTR + SRV + TXT + A in one response."""
     instance_name = f"{instance}.{SERVICE}"
@@ -103,7 +103,7 @@ def compression_packet() -> Tuple[bytes, int]:
 
     Returns the packet and the offset the pointer targets.
     """
-    first_name = encode_name("bazzite.local.")
+    first_name = encode_name("pc.local.")
     name_offset = 12
     pointer = bytes([0xC0 | (name_offset >> 8), name_offset & 0xFF])
     header = (
@@ -123,7 +123,7 @@ def compression_packet() -> Tuple[bytes, int]:
         + a_rdata
     )
     txt_rdata = bytearray()
-    for entry in ("id=" + "cd" * 16, "name=Bazzite"):
+    for entry in ("id=" + "cd" * 16, "name=PC"):
         encoded = entry.encode("utf-8")
         txt_rdata.append(len(encoded))
         txt_rdata += encoded

@@ -7,7 +7,6 @@
     "tags": [
       "power",
       "wake-on-lan",
-      "bazzite",
       "barge"
     ],
     "description": "Find and pair with a Barge machine (barged) from Steam Deck Gaming Mode: state, Wake-on-LAN, sleep, restart, shut down and cancel, with pairing approved on the PC.",

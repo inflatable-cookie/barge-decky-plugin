@@ -110,8 +110,8 @@ def test_the_deck_names_itself_on_the_pc(monkeypatch: Any) -> None:
     monkeypatch.setattr("barge_plugin.pair_flow.socket.gethostname", lambda: "steamdeck")
     assert default_client_name() == "Steam Deck"
 
-    monkeypatch.setattr("barge_plugin.pair_flow.socket.gethostname", lambda: "bazzite-pc")
-    assert default_client_name() == "bazzite-pc"
+    monkeypatch.setattr("barge_plugin.pair_flow.socket.gethostname", lambda: "gaming-pc")
+    assert default_client_name() == "gaming-pc"
 
     monkeypatch.setattr("barge_plugin.pair_flow.socket.gethostname", lambda: "localhost")
     assert default_client_name() == "Steam Deck"
@@ -241,12 +241,12 @@ def test_rediscovery_moves_a_paired_machine_by_its_daemon_id(tmp_path: Path) -> 
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("host", ["192.0.2.55", "BAZZITE.Local."])
+@pytest.mark.parametrize("host", ["192.0.2.55", "PC.Local."])
 def test_legacy_machine_is_hidden_by_address_or_hostname(tmp_path: Path, host: str) -> None:
     async def scenario() -> None:
         store = ConfigStore(tmp_path / "settings")
         saved = MachineConfig.validated(
-            machine_id="bazzite", name="bazzite", host=host, mac="",
+            machine_id="pc", name="pc", host=host, mac="",
         )
         store.save(MachinesDocument(machines=(saved,), selected_id=saved.id))
         browser = FakeBrowser()
@@ -258,7 +258,7 @@ def test_legacy_machine_is_hidden_by_address_or_hostname(tmp_path: Path, host: s
                 protocol_version="1",
                 address="192.0.2.55",
                 port=9788,
-                hostname="bazzite.local",
+                hostname="pc.local",
             )
         ]
         svc = build_service(tmp_path / "settings", browser)
@@ -279,7 +279,7 @@ def test_discovery_uses_reported_mac_after_a_legacy_machine_moves(
         with FakeBarged() as fake:
             store = ConfigStore(tmp_path / "settings")
             saved = MachineConfig.validated(
-                machine_id="bazzite", name="bazzite", host="127.0.0.2",
+                machine_id="pc", name="pc", host="127.0.0.2",
                 daemon_port=fake.port, mac=fake.mac,
             )
             store.save(MachinesDocument(machines=(saved,), selected_id=saved.id))
@@ -317,7 +317,7 @@ def test_state_fills_missing_details_and_preserves_configured_ones(tmp_path: Pat
         with FakeBarged() as fake:
             store = ConfigStore(tmp_path / "settings")
             saved = MachineConfig.validated(
-                machine_id="bazzite", name="bazzite", host="127.0.0.1",
+                machine_id="pc", name="pc", host="127.0.0.1",
                 daemon_port=fake.port, mac="",
             )
             store.save(MachinesDocument(machines=(saved,), selected_id=saved.id))

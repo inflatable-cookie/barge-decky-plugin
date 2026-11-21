@@ -1,5 +1,5 @@
 {
-  "source_repo": "/Users/tom/Dev/projects/barge",
+  "source_repo": "https://github.com/inflatable-cookie/barge",
   "barge_commit": "7f91be22be46b8629e5fe42275fa52d324f1bdaf",
   "generated_from": "crates/barge-machine (auth::sign, auth::verify, wol::magic_packet)",
   "hmac_cases": [

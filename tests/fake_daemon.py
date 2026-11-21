@@ -40,9 +40,9 @@ class FakeBarged:
         self,
         *,
         machine_id: str = "ab" * 16,
-        name: str = "Bazzite",
+        name: str = "PC",
         mac: str = "00:11:22:33:44:ff",
-        broadcast: str = "192.168.1.255",
+        broadcast: str = "192.0.2.255",
     ) -> None:
         self.machine_id = machine_id
         self.name = name
