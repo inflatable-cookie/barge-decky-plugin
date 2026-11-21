@@ -16,12 +16,20 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from . import discovery, local_approval, mdns, pair_flow, protocol, wol
-from .config import ConfigStore, MachineConfig, MachinesDocument, machine_id_from_name
+from .config import (
+    ConfigStore,
+    MachineConfig,
+    MachinesDocument,
+    RoutePath,
+    machine_id_from_name,
+    safe_optional_host,
+)
 from .error_log import ErrorEntry, ErrorLog
 from .errors import BargeError
+from .link import MachineLink
 from .state import FAST_POLL_MS, IDLE_POLL_MS, LastAction, MachineTracker, now_ms
 from .transport import DaemonClient, HttpTransport, StdlibHttpTransport
 
@@ -286,6 +294,11 @@ class BargeService:
             candidate_id = existing.id if existing is not None else machine_id_from_name(
                 name, taken=doc.ids()
             )
+            host_changed = (
+                existing is None
+                or existing.host != host.strip()
+                or existing.daemon_port != int(daemon_port)
+            )
             validated = MachineConfig.validated(
                 machine_id=candidate_id,
                 name=name,
@@ -297,6 +310,9 @@ class BargeService:
                 delay_s=int(delay_s),
                 daemon_machine_id=existing.daemon_machine_id if existing is not None else "",
                 client_id=existing.client_id if existing is not None else "",
+                tailscale_name=existing.tailscale_name if existing is not None else "",
+                tailscale_ip=existing.tailscale_ip if existing is not None else "",
+                last_path=None if host_changed else (existing.last_path if existing is not None else None),
             )
             self._ensure_unique_name(doc, validated)
             is_new = existing is None
@@ -477,7 +493,7 @@ class BargeService:
         try:
             valid_action = protocol.validate_power_action(action)
             config = self._resolve(machine_id)
-            client = self._require_client(config)
+            link = self._require_link(config)
         except BargeError as exc:
             return {"ok": False, "error": exc.message, "state": self.snapshot()}
 
@@ -487,7 +503,9 @@ class BargeService:
         await self._emit_state(self.snapshot())
 
         try:
-            await asyncio.to_thread(client.power, valid_action, config.delay_s)
+            reached = await asyncio.to_thread(
+                link.run, lambda client: client.power(valid_action, config.delay_s)
+            )
         except BargeError as exc:
             tracker.refused(exc.message, exc.kind)
             self._record_action_error(config, exc)
@@ -496,6 +514,8 @@ class BargeService:
             return {"ok": False, "error": exc.message, "state": snap}
 
         tracker.sent(LastAction.power(valid_action, now_ms(), config.delay_s))
+        tracker.set_route(reached.path, reached.host)
+        self._remember_path(config.id, reached.path)
         self._log_info(f"Requested {valid_action} for {config.name} ({config.delay_s}s)")
         snap = self.snapshot()
         await self._emit_state(snap)
@@ -506,13 +526,13 @@ class BargeService:
         """Cancel a pending power action on the daemon."""
         try:
             config = self._resolve(machine_id)
-            client = self._require_client(config)
+            link = self._require_link(config)
         except BargeError as exc:
             return {"ok": False, "error": exc.message, "state": self.snapshot()}
 
         tracker = self._tracker(config.id)
         try:
-            result = await asyncio.to_thread(client.cancel)
+            reached = await asyncio.to_thread(link.run, lambda client: client.cancel())
         except BargeError as exc:
             tracker.failed(exc.message, exc.kind)
             self._record_action_error(config, exc)
@@ -520,8 +540,11 @@ class BargeService:
             await self._emit_state(snap)
             return {"ok": False, "error": exc.message, "state": snap}
 
+        result = reached.value
         self._bump(config.id)
         tracker.cancelled()
+        tracker.set_route(reached.path, reached.host)
+        self._remember_path(config.id, reached.path)
         self._log_info(f"Cancel response for {config.name}: cancelled={result.cancelled}")
         snap = await self.poll_once()
         self._wake_poller.set()
@@ -534,8 +557,9 @@ class BargeService:
             key = self._store.read_key(config.id)
             if key is None:
                 raise BargeError("usage", NOT_PAIRED_MESSAGE)
-            client = self._build_client(config, key)
-            daemon_state = await asyncio.to_thread(client.state)
+            link = self._build_link(config, key)
+            reached = await asyncio.to_thread(link.run, lambda client: client.state())
+            daemon_state = reached.value
             if (
                 config.daemon_machine_id
                 and daemon_state.machine_id
@@ -549,9 +573,14 @@ class BargeService:
             return
 
         if epoch == self._epoch_of(config.id):
-            self._tracker(config.id).apply_poll_ok(started_at_ms, daemon_state)
+            self._tracker(config.id).apply_poll_ok(
+                started_at_ms,
+                daemon_state,
+                route=reached.path,
+                route_host=reached.host,
+            )
             self._last_poll_error.pop(config.id, None)
-            self._learn_from_state(config, daemon_state)
+            self._learn_from_state(config, daemon_state, reached.path)
 
     async def _decide_pair(self, request_id: str, *, approve: bool) -> Dict[str, Any]:
         try:
@@ -605,17 +634,31 @@ class BargeService:
             if machine is not None:
                 self._log_info(f"{machine.name} is now at {machine.host}:{machine.daemon_port}")
 
-    def _learn_from_state(self, config: MachineConfig, state: protocol.DaemonState) -> None:
-        """Fill identity and Wake-on-LAN details from a successful poll."""
+    def _learn_from_state(
+        self,
+        config: MachineConfig,
+        state: protocol.DaemonState,
+        route_path: RoutePath,
+    ) -> None:
+        """Fill identity, Wake-on-LAN, tailnet addresses, and last route from a successful poll."""
         # Older settings use the generic broadcast address when no subnet was set.
         broadcast = config.broadcast
         if broadcast == wol.DEFAULT_BROADCAST and state.broadcast:
             broadcast = state.broadcast
+        tailscale_name = safe_optional_host(
+            state.tailscale_name, "tailscale name", config.tailscale_name
+        )
+        tailscale_ip = safe_optional_host(
+            state.tailscale_ip, "tailscale ip", config.tailscale_ip
+        )
         updated = replace(
             config,
             daemon_machine_id=config.daemon_machine_id or state.machine_id,
             mac=config.mac or state.mac or "",
             broadcast=broadcast,
+            tailscale_name=tailscale_name,
+            tailscale_ip=tailscale_ip,
+            last_path=route_path,
         )
         if updated == config:
             return
@@ -623,6 +666,17 @@ class BargeService:
             doc = self._store.load()
             if doc.get(config.id) == config:
                 self._store.save(doc.upsert(updated, select=False))
+        except BargeError as exc:
+            self._record_store_error(exc)
+
+    def _remember_path(self, machine_id: str, route_path: RoutePath) -> None:
+        """Persist the route that answered when it differs from the stored one."""
+        try:
+            doc = self._store.load()
+            current = doc.get(machine_id)
+            if current is None or current.last_path == route_path:
+                return
+            self._store.save(doc.upsert(replace(current, last_path=route_path), select=False))
         except BargeError as exc:
             self._record_store_error(exc)
 
@@ -636,6 +690,7 @@ class BargeService:
     ) -> Dict[str, Any]:
         if selected is not None:
             tracker = self._tracker(selected.id)
+            route, route_host = _effective_route(selected, tracker)
             snap = tracker.to_dict(
                 now,
                 configured=selected.is_configured,
@@ -645,6 +700,8 @@ class BargeService:
             attention = self._attention(tracker)
         else:
             tracker = MachineTracker()
+            route = "lan"
+            route_host = ""
             snap = tracker.to_dict(
                 now,
                 configured=False,
@@ -670,6 +727,8 @@ class BargeService:
         snap["discover_error"] = self._discover_error
         snap["pairing"] = self._pair_flow.view()
         snap["this_pc"] = self._local_approvals.view()
+        snap["route"] = route
+        snap["route_host"] = route_host
         return snap
 
     def _discovered_view(self, doc: MachinesDocument) -> List[Dict[str, Any]]:
@@ -746,6 +805,14 @@ class BargeService:
         """Invalidate in-flight polls for a machine after a config change or action."""
         self._epochs[machine_id] = self._epoch_of(machine_id) + 1
 
+    def _require_credentials(self, config: MachineConfig) -> bytes:
+        if not config.can_poll:
+            raise BargeError("usage", "configure a machine host first")
+        key = self._store.read_key(config.id)
+        if key is None:
+            raise BargeError("refused", "machine is not paired; add the LAN key in Settings")
+        return key
+
     def _build_client(self, config: MachineConfig, key: bytes) -> DaemonClient:
         return DaemonClient.for_lan(
             host=config.host,
@@ -756,12 +823,13 @@ class BargeService:
         )
 
     def _require_client(self, config: MachineConfig) -> DaemonClient:
-        if not config.can_poll:
-            raise BargeError("usage", "configure a machine host first")
-        key = self._store.read_key(config.id)
-        if key is None:
-            raise BargeError("refused", "machine is not paired; add the LAN key in Settings")
-        return self._build_client(config, key)
+        return self._build_client(config, self._require_credentials(config))
+
+    def _build_link(self, config: MachineConfig, key: bytes) -> MachineLink:
+        return MachineLink.for_machine(config, key, transport=self._transport)
+
+    def _require_link(self, config: MachineConfig) -> MachineLink:
+        return self._build_link(config, self._require_credentials(config))
 
     def _record_poll_failure(self, config: MachineConfig, exc: BargeError) -> None:
         if self._last_poll_error.get(config.id) == exc.message:
@@ -827,3 +895,19 @@ class BargeService:
     def _log_info(self, message: str) -> None:
         if self._logger is not None:
             self._logger.info(message)
+
+
+def _effective_route(config: MachineConfig, tracker: MachineTracker) -> Tuple[RoutePath, str]:
+    """Return the active or last-known `(route, host)` for the panel subtitle."""
+    route: Optional[RoutePath] = tracker.route or config.last_path
+    if route == "tailscale":
+        if tracker.route == "tailscale" and tracker.route_host:
+            return "tailscale", tracker.route_host
+        ts_host = config.tailscale_name or config.tailscale_ip
+        if ts_host:
+            return "tailscale", ts_host
+    return "lan", (
+        tracker.route_host
+        if tracker.route == "lan" and tracker.route_host
+        else config.host
+    )

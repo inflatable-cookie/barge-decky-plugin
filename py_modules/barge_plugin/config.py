@@ -19,7 +19,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 
 from . import auth, protocol, wol
 from .errors import BargeError
@@ -39,6 +39,8 @@ _MACHINE_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
 _ALLOWED_NAME_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
 )
+RoutePath = Literal["lan", "tailscale"]
+_VALID_ROUTE_PATHS = frozenset(("lan", "tailscale"))
 
 
 def is_valid_machine_id(machine_id: str) -> bool:
@@ -103,6 +105,38 @@ def validate_daemon_machine_id(daemon_machine_id: str) -> str:
     return trimmed
 
 
+def validate_optional_host(value: str, label: str) -> str:
+    """Validate an optional hostname or IP address (empty when unset)."""
+    trimmed = value.strip()
+    if not trimmed:
+        return ""
+    if any(ch.isspace() for ch in trimmed):
+        raise BargeError("usage", f"{label} must not contain spaces")
+    return trimmed
+
+
+def safe_optional_host(raw: Optional[str], label: str, fallback: str) -> str:
+    """Normalize an optional host reported by barged, keeping `fallback` if absent or invalid."""
+    if not raw or not raw.strip():
+        return fallback
+    try:
+        return validate_optional_host(raw, label)
+    except BargeError:
+        return fallback
+
+
+def validate_last_path(value: Optional[str]) -> Optional[RoutePath]:
+    """Validate a remembered route ('lan', 'tailscale', or None)."""
+    if value is None:
+        return None
+    trimmed = value.strip().lower()
+    if not trimmed:
+        return None
+    if trimmed not in _VALID_ROUTE_PATHS:
+        raise BargeError("usage", f"last_path must be 'lan' or 'tailscale', not {value!r}")
+    return trimmed  # type: ignore[return-value]
+
+
 @dataclass(frozen=True)
 class MachineConfig:
     """One configured target machine. Its LAN key is stored separately, under `id`."""
@@ -117,6 +151,9 @@ class MachineConfig:
     delay_s: int = protocol.DEFAULT_POWER_DELAY_S
     daemon_machine_id: str = ""
     client_id: str = ""
+    tailscale_name: str = ""
+    tailscale_ip: str = ""
+    last_path: Optional[RoutePath] = None
 
     @property
     def is_configured(self) -> bool:
@@ -147,6 +184,9 @@ class MachineConfig:
         delay_s: int = protocol.DEFAULT_POWER_DELAY_S,
         daemon_machine_id: str = "",
         client_id: str = "",
+        tailscale_name: str = "",
+        tailscale_ip: str = "",
+        last_path: Optional[str] = None,
     ) -> MachineConfig:
         """Build and validate a MachineConfig from user input."""
         if not is_valid_machine_id(machine_id):
@@ -169,6 +209,9 @@ class MachineConfig:
             delay_s=valid_delay,
             daemon_machine_id=validate_daemon_machine_id(daemon_machine_id),
             client_id=validate_client_id(client_id),
+            tailscale_name=validate_optional_host(tailscale_name, "tailscale name"),
+            tailscale_ip=validate_optional_host(tailscale_ip, "tailscale ip"),
+            last_path=validate_last_path(last_path),
         )
 
     def to_public_dict(self) -> Dict[str, Any]:
@@ -184,6 +227,9 @@ class MachineConfig:
             "delay_s": self.delay_s,
             "daemon_machine_id": self.daemon_machine_id,
             "client_id": self.client_id,
+            "tailscale_name": self.tailscale_name,
+            "tailscale_ip": self.tailscale_ip,
+            "last_path": self.last_path,
         }
 
 
@@ -348,12 +394,24 @@ class ConfigStore:
                 broadcast=str(entry.get("broadcast", wol.DEFAULT_BROADCAST)),
                 wol_port=int(entry.get("wol_port", wol.DEFAULT_WOL_PORT)),
                 delay_s=int(entry.get("delay_s", protocol.DEFAULT_POWER_DELAY_S)),
-                daemon_machine_id=str(entry.get("daemon_machine_id", "")),
-                client_id=str(entry.get("client_id", "")),
+                daemon_machine_id=self._optional_str(entry, "daemon_machine_id"),
+                client_id=self._optional_str(entry, "client_id"),
+                tailscale_name=self._optional_str(entry, "tailscale_name"),
+                tailscale_ip=self._optional_str(entry, "tailscale_ip"),
+                last_path=self._optional_str(entry, "last_path") or None,
             )
         except (BargeError, TypeError, ValueError) as exc:
             message = exc.message if isinstance(exc, BargeError) else str(exc)
             raise BargeError("unknown_state", f"machine settings are malformed: {message}") from exc
+
+    @staticmethod
+    def _optional_str(entry: Dict[str, Any], key: str) -> str:
+        value = entry.get(key)
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise BargeError("unknown_state", f"{key} must be a string")
+        return value
 
     def _migrate_legacy(self) -> MachinesDocument:
         """Move v0.1.0 `machine.json` + `lan.key` into the v2 layout, keeping the key."""
