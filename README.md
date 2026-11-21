@@ -58,4 +58,4 @@ The distributable archive is written to
 
 Pre-1.0: expect rough edges and report them as
 [issues](https://github.com/inflatable-cookie/barge-decky-plugin/issues).
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). It started from the Decky plugin template, whose BSD 3-Clause notice is in [NOTICE](NOTICE).

@@ -19,7 +19,7 @@ mkdir -p "$STAGE_DIR"
 cp "$ROOT_DIR/package.json" "$STAGE_DIR/"
 cp "$ROOT_DIR/plugin.json" "$STAGE_DIR/"
 cp "$ROOT_DIR/main.py" "$STAGE_DIR/"
-cp "$ROOT_DIR/LICENSE" "$STAGE_DIR/"
+cp "$ROOT_DIR/LICENSE" "$ROOT_DIR/NOTICE" "$STAGE_DIR/"
 cp "$ROOT_DIR/README.md" "$STAGE_DIR/"
 cp -R "$ROOT_DIR/dist" "$STAGE_DIR/dist"
 

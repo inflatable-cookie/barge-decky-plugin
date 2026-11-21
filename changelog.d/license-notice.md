@@ -1,0 +1,1 @@
+- Move the Decky plugin template's BSD 3-Clause notice from `LICENSE` into `NOTICE`, and ship `NOTICE` in the release zip, so `LICENSE` is plain MIT.
