@@ -4,10 +4,15 @@ Matches `crates/barge-machine/src/protocol.rs`. Pairing and client-management
 documents are encoded and decoded exactly as `barged` sends them; every decoder
 rejects unknown fields and a non-matching schema rather than guessing.
 
-One deliberate exception: the state decoder also reads the pre-discovery
-`barge.machine-state/1` shape, so a machine paired with an older daemon keeps
-working without the machine ID, MAC and broadcast fields. Writes always use the
-current documents.
+Two deliberate exceptions, both on the state document only. The state decoder
+also reads the pre-discovery `barge.machine-state/1` shape, so a machine paired
+with an older daemon keeps working without the machine ID, MAC and broadcast
+fields. And since installing a plugin update on the Deck is awkward, the state
+decoder carries the additive `tailscale_name` / `tailscale_ip` tailnet fields and
+ignores any other unknown top-level field on a machine-state document, so a
+newer daemon cannot break state reads. A wrong schema name or version, a missing
+required field, or a wrong type still fails. Writes always use the current
+documents.
 """
 
 from __future__ import annotations
@@ -167,6 +172,16 @@ def _optional_mac(doc: Dict[str, Any], field: str, label: str) -> Optional[str]:
         raise BargeError("unknown_state", f"malformed {label}: invalid {field}") from None
 
 
+def _optional_text(doc: Dict[str, Any], field: str, label: str) -> Optional[str]:
+    """Read an additive optional string (such as a tailnet field) or None."""
+    value = doc.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise BargeError("unknown_state", f"malformed {label}: invalid {field}")
+    return value
+
+
 def _optional_broadcast(doc: Dict[str, Any], field: str, label: str) -> Optional[str]:
     value = doc.get(field)
     if value is None:
@@ -198,6 +213,8 @@ class DaemonState:
     machine_id: str = ""
     mac: Optional[str] = None
     broadcast: Optional[str] = None
+    tailscale_name: Optional[str] = None
+    tailscale_ip: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -358,13 +375,16 @@ def encode_pair_decision() -> bytes:
 
 
 def decode_state(body: bytes) -> DaemonState:
-    """Decode `barge.machine-state/2` (or the pre-discovery `/1` shape)."""
+    """Decode `barge.machine-state/2` (or the pre-discovery `/1` shape).
+
+    The tailnet fields (`tailscale_name`, `tailscale_ip`) are carried when
+    present; any other unknown top-level field is ignored so additive daemon
+    fields never break state reads. The Deck stays LAN-only: callers must not
+    use the tailnet addresses for transport.
+    """
     doc = _parse_json_object(body, "state response")
     schema = _require_schema_in(doc, _SUPPORTED_STATE_SCHEMAS, "state response")
-    allowed = {"schema", "power", "observed_at_unix_ms", "pending"}
-    if schema == STATE_SCHEMA:
-        allowed |= {"machine_id", "mac", "broadcast"}
-    _reject_unknown_fields(doc, frozenset(allowed), schema)
+    # No unknown-field rejection here: see the module docstring.
 
     power = doc.get("power")
     if not isinstance(power, str) or power not in _VALID_POWER_STATES:
@@ -395,14 +415,17 @@ def decode_state(body: bytes) -> DaemonState:
             raise BargeError("unknown_state", f"malformed {schema}: invalid pending deadline")
         pending = Pending(action=action, deadline_unix_ms=deadline)  # type: ignore[arg-type]
 
+    on_v2 = schema == STATE_SCHEMA
     return DaemonState(
         schema=schema,
         power=power,  # type: ignore[arg-type]
         observed_at_unix_ms=observed_at,
         pending=pending,
-        machine_id=_optional_machine_id(doc, "machine_id", schema) if schema == STATE_SCHEMA else "",
-        mac=_optional_mac(doc, "mac", schema) if schema == STATE_SCHEMA else None,
-        broadcast=_optional_broadcast(doc, "broadcast", schema) if schema == STATE_SCHEMA else None,
+        machine_id=_optional_machine_id(doc, "machine_id", schema) if on_v2 else "",
+        mac=_optional_mac(doc, "mac", schema) if on_v2 else None,
+        broadcast=_optional_broadcast(doc, "broadcast", schema) if on_v2 else None,
+        tailscale_name=_optional_text(doc, "tailscale_name", schema) if on_v2 else None,
+        tailscale_ip=_optional_text(doc, "tailscale_ip", schema) if on_v2 else None,
     )
 
 

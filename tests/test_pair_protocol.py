@@ -64,7 +64,8 @@ def test_state_v1_is_still_read_without_the_new_fields() -> None:
         {"machine_id": "AB" * 16},
         {"mac": "00:11:22:33:44"},
         {"broadcast": "192.168.1.300"},
-        {"unexpected": True},
+        {"tailscale_name": 42},
+        {"tailscale_ip": ["100.64.0.1"]},
         {"power": "sleeping"},
     ],
 )
@@ -72,6 +73,45 @@ def test_malformed_state_documents_are_refused(overrides: dict) -> None:
     with pytest.raises(BargeError) as exc_info:
         protocol.decode_state(document(state_document(**overrides)))
     assert exc_info.value.kind == "unknown_state"
+
+
+def test_state_carries_the_tailnet_fields() -> None:
+    state = protocol.decode_state(
+        document(
+            state_document(
+                tailscale_name="bazzite.tail012345.ts.net",
+                tailscale_ip="100.64.0.1",
+            )
+        )
+    )
+    assert state.tailscale_name == "bazzite.tail012345.ts.net"
+    assert state.tailscale_ip == "100.64.0.1"
+
+    absent = protocol.decode_state(document(state_document()))
+    assert absent.tailscale_name is None
+    assert absent.tailscale_ip is None
+
+
+def test_state_ignores_unknown_fields_but_still_refuses_a_bad_schema() -> None:
+    state = protocol.decode_state(document(state_document(future_field="tomorrow")))
+    assert state.power == "awake"
+    assert state.machine_id == MACHINE_ID
+
+    with pytest.raises(BargeError) as schema_info:
+        protocol.decode_state(
+            document(state_document(schema="barge.machine-state/9", future_field="tomorrow"))
+        )
+    assert schema_info.value.kind == "unknown_state"
+
+
+def test_state_still_requires_its_required_fields() -> None:
+    for payload in (
+        {k: v for k, v in state_document().items() if k != "power"},
+        {k: v for k, v in state_document().items() if k != "observed_at_unix_ms"},
+    ):
+        with pytest.raises(BargeError) as exc_info:
+            protocol.decode_state(document(payload))
+        assert exc_info.value.kind == "unknown_state"
 
 
 def test_pair_request_encoding_matches_the_daemon_document() -> None:

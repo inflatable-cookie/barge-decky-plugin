@@ -1,0 +1,3 @@
+- Read the tailnet fields in `barged`'s state: `decode_state` carries the optional `tailscale_name` and `tailscale_ip` strings on `DaemonState` and ignores any other unknown top-level field on machine-state documents, so a newer daemon cannot break state reads. A wrong schema name or version, a missing required field, or a wrong type still fails, and the pairing/client codecs stay strict.
+- Discovery tolerates a `tailscale` mDNS TXT key and ignores it; the plugin stays LAN-only and never tries tailnet addresses.
+- Bump the version to 0.3.1.
