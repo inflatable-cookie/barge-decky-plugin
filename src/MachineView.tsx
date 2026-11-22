@@ -4,6 +4,7 @@ import {
   DialogButton,
   Dropdown,
   Field,
+  Focusable,
   PanelSection,
   PanelSectionRow,
   ProgressBar,
@@ -249,7 +250,10 @@ export function MachineView({
               />
             </PanelSectionRow>
             <PanelSectionRow>
-              <div style={{ display: "flex", gap: 8, width: "100%" }}>
+              <Focusable
+                flow-children="horizontal"
+                style={{ display: "flex", gap: 8, width: "100%" }}
+              >
                 <DialogButton
                   aria-label={`Approve ${request.client_name}`}
                   style={{ flex: 1 }}
@@ -266,7 +270,7 @@ export function MachineView({
                 >
                   Deny
                 </DialogButton>
-              </div>
+              </Focusable>
             </PanelSectionRow>
           </Fragment>
         ))}
@@ -276,7 +280,7 @@ export function MachineView({
   const bottomRow = (
     <PanelSection>
       <PanelSectionRow>
-        <div style={{ display: "flex", gap: 8, width: "100%" }}>
+        <Focusable flow-children="horizontal" style={{ display: "flex", gap: 8, width: "100%" }}>
         <DialogButton
           aria-label="Refresh"
           style={ICON_BUTTON_STYLE}
@@ -303,7 +307,7 @@ export function MachineView({
           <FaList aria-hidden="true" />
           <span style={VISUALLY_HIDDEN}>Error log</span>
         </DialogButton>
-        </div>
+        </Focusable>
       </PanelSectionRow>
     </PanelSection>
   );

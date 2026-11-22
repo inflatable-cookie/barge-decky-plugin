@@ -1,0 +1,2 @@
+- The bottom icon row (Refresh, Settings, Error log) and the Approve/Deny row are `Focusable` rows with horizontal child flow, so the d-pad moves left and right between their buttons. Before, Steam's controller navigation treated them as vertical lists and right did nothing.
+- Bump the version to 0.4.1.
