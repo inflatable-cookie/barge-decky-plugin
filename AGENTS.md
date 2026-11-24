@@ -30,6 +30,13 @@ Do not invent new daemon endpoints, schemas, or state names here. Keep the Pytho
 - `tests/` — `pytest` suite covering Rust-generated HMAC/WoL vectors, state transitions, timeouts, loopback HTTP client, config/key isolation, and async service behavior.
 - `scripts/package.sh` — builds the distributable plugin zip under `out/`.
 
+## Test scratch and fixtures
+
+- Tests write only under pytest's `tmp_path`. It lives under the run's `TMPDIR`, which the task runner removes afterwards, and pytest itself keeps only its last few base directories. A new test that needs files takes `tmp_path`: never the checkout, a home folder, a real Decky settings folder or a drive root.
+- Fixtures are committed code in `tests/`: `fake_daemon.py`, `mdns_packets.py`, `support.py` and the Rust-generated vectors in `tests/vectors/barge_machine_vectors.json`. Use documentation addresses (`192.0.2.0/24`) and made-up keys and machine names in them, never real hosts or keys.
+- Network tests stay on loopback. The fake daemon and the mDNS responder bind `127.0.0.1` on an ephemeral port and are shut down by their test. Wake-on-LAN goes through an injected sender. No test reaches a real machine, the LAN or Tailscale.
+- Build output (`dist/`, `out/` including `out/stage/`, `__pycache__/`, `.pytest_cache/`) is git-ignored. `scripts/package.sh` clears `out/stage/` itself. Nothing else needs cleaning up.
+
 ## Validate
 
 - Backend tests: `pytest` (using Python 3.9+ with `pytest` installed; no runtime pip dependencies required).
