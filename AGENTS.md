@@ -33,7 +33,7 @@ Do not invent new daemon endpoints, schemas, or state names here. Keep the Pytho
 ## Test scratch and fixtures
 
 - Tests write only under pytest's `tmp_path`. It lives under the run's `TMPDIR`, which the task runner removes afterwards, and pytest itself keeps only its last few base directories. A new test that needs files takes `tmp_path`: never the checkout, a home folder, a real Decky settings folder or a drive root.
-- Fixtures are committed code in `tests/`: `fake_daemon.py`, `mdns_packets.py`, `support.py` and the Rust-generated vectors in `tests/vectors/barge_machine_vectors.json`. Use documentation addresses (`192.0.2.0/24`) and made-up keys and machine names in them, never real hosts or keys.
+- Fixtures are committed code in `tests/`: `fake_daemon.py`, `mdns_packets.py`, `support.py` and the Rust-generated vectors in `tests/vectors/barge_machine_vectors.json`. Use placeholders in them: documentation addresses such as `192.0.2.0/24`, `100.64.0.0/10` addresses and `*.tailNNNN.ts.net` names for Tailscale, and made-up keys and machine names. Never use real hosts or keys.
 - Network tests stay on loopback. The fake daemon and the mDNS responder bind `127.0.0.1` on an ephemeral port and are shut down by their test. Wake-on-LAN goes through an injected sender. No test reaches a real machine, the LAN or Tailscale.
 - Build output (`dist/`, `out/` including `out/stage/`, `__pycache__/`, `.pytest_cache/`) is git-ignored. `scripts/package.sh` clears `out/stage/` itself. Nothing else needs cleaning up.
 
