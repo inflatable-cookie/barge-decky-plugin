@@ -1,0 +1,11 @@
+catalog:
+  typescript: 6.0.3
+
+# @decky/rollup pins its own TypeScript 5; build with the project's version.
+overrides:
+  '@decky/rollup>typescript': 'catalog:'
+
+peerDependencyRules:
+  ignoreMissing:
+    - react
+    - react-dom
